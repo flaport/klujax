@@ -2,11 +2,10 @@
 
 namespace py = pybind11;
 
-int add(int i, int j){
-  return i + j;
+float solve(float A, float b){
+  return b/A;
 }
 
-
 PYBIND11_MODULE(klujax_cpp, m) {
-    m.def("add", &add, "add two numbers");
+    m.def("solve", &solve, "solve a linear system of equations");
 }
