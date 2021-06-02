@@ -26,6 +26,24 @@ klujax_cpp = Extension(
     language="c++",
 )
 
+# klujax_cpp = Extension(
+#     name="custom_call_for_test",
+#     sources=["custom_call_for_test.cpp"],
+#     include_dirs=[
+#         os.path.join(env, "include", python),
+#         os.path.join(site_packages, "pybind11", "include"),
+#     ],
+#     library_dirs=[
+#         site_packages,
+#         os.path.dirname(site_packages),
+#         os.path.dirname(os.path.dirname(site_packages)),
+#     ],
+#     extra_compile_args=[],
+#     extra_link_args=["-static-libstdc++"],
+#     libraries=[],
+#     language="c++",
+# )
+
 setup(
     name="klujax",
     version="0.0.0",
