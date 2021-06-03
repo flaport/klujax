@@ -24,7 +24,13 @@ klujax_cpp = Extension(
     ],
     extra_compile_args=[],
     extra_link_args=["-static-libstdc++"],
-    libraries=[],
+    libraries=[
+        "klu",
+        "btf",
+        "amd",
+        "colamd",
+        "suitesparseconfig",
+    ],
     language="c++",
 )
 
