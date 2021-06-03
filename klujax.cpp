@@ -5,11 +5,13 @@ namespace py = pybind11;
 
 void solve_f32(void *out, void **in) {
   const long N = *reinterpret_cast<long *>(in[0]);
-  const float *A = reinterpret_cast<float *>(in[1]);
-  const float *b = reinterpret_cast<float *>(in[2]);
+  const float *Ax = reinterpret_cast<float *>(in[1]);
+  const int *Ai = reinterpret_cast<int *>(in[2]);
+  const int *Aj = reinterpret_cast<int *>(in[3]);
+  const float *b = reinterpret_cast<float *>(in[4]);
   float *result = reinterpret_cast<float *>(out);
   for (int i = 0; i < N; i++) {
-    result[i] = b[i] / A[i];
+    result[i] = b[i] / Ax[i];
   }
 }
 
