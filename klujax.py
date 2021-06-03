@@ -1,4 +1,5 @@
 from time import time
+import numpy as np
 
 import jax
 import jax.numpy as jnp
@@ -37,16 +38,19 @@ xla_client.register_cpu_custom_call_target(
 
 
 def solve_xla_translation(c, Ac, bc):
-    shape = c.get_shape(Ac)
+    A_shape = c.get_shape(Ac)
+    b_shape = c.get_shape(bc)
+    N = b_shape.dimensions()[0]
     return xla_client.ops.CustomCallWithLayout(
         c,
         b"solve",
-        operands=(Ac, bc),
+        operands=(xla_client.ops.ConstantLiteral(c, N), Ac, bc),
         operand_shapes_with_layout=(
-            shape,
-            shape,
+            xla_client.Shape.array_shape(np.dtype(np.int64), (), ()),
+            A_shape,
+            b_shape,
         ),
-        shape_with_layout=shape,
+        shape_with_layout=b_shape,
     )
 
 
@@ -72,11 +76,20 @@ xla.backend_specific_translations["cpu"][solve_prim] = solve_xla_translation
 # ad.primitive_jvps[solve_prim] = solve_value_and_jvp
 
 if __name__ == "__main__":
-    a = jnp.array([3.0, 5.0])
-    b = jnp.array([7.0, 11.0])
-    t1 = time()
-    print(solve(a, b))
-    t0, t1 = t1, time()
-    print(t1 - t0)
-    print(jax.jit(solve)(a, b))
-    t0, t1 = t1, time()
+    A_key, b_key = jax.random.split(jax.random.PRNGKey(42), 2)
+    A = jax.random.normal(A_key, (3000,))
+    b = jax.random.normal(b_key, (3000,))
+
+    t = time()
+    result = solve(A, b)
+    print(f"{time()-t:.3e}", result[:5])
+
+    solve = jax.jit(solve)
+    t = time()
+    result = solve(A, b)
+    print(f"{time()-t:.3e}", result[:5])
+
+    t = time()
+    result = solve(A, b)
+    print(f"{time()-t:.3e}", result[:5])
+
