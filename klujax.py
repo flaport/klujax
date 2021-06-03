@@ -52,17 +52,29 @@ def solve_xla_translation(c, Ax, Ai, Aj, b):
     Ai_shape = c.get_shape(Ai)
     Aj_shape = c.get_shape(Aj)
     b_shape = c.get_shape(b)
-    nnz = xla_client.ops.ConstantLiteral(c, np.int32(Ax_shape.dimensions()[0]))
-    n_col = xla_client.ops.ConstantLiteral(c, np.int32(b_shape.dimensions()[0]))
-    nnz_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
+    n_nz = xla_client.ops.ConstantLiteral(c, np.int32(Ax_shape.dimensions()[0]))
+    _n_col, *_n_rhs_list = b_shape.dimensions()
+    n_col = xla_client.ops.ConstantLiteral(c, np.int32(_n_col))
+    if _n_rhs_list:
+        _n_rhs = np.prod(_n_rhs_list)
+        b = xla_client.ops.Reshape(
+            xla_client.ops.Transpose(b, (1, 0)), (_n_col * _n_rhs,)
+        )
+        b_shape = c.get_shape(b)
+    else:
+        _n_rhs = 1
+    n_rhs = xla_client.ops.ConstantLiteral(c, np.int32(_n_rhs))
+    n_nz_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
     n_col_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
-    return xla_client.ops.CustomCallWithLayout(
+    n_rhs_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
+    result = xla_client.ops.CustomCallWithLayout(
         c,
         b"solve",
-        operands=(nnz, n_col, Ax, Ai, Aj, b),
+        operands=(n_nz, n_col, n_rhs, Ax, Ai, Aj, b),
         operand_shapes_with_layout=(
-            nnz_shape,
+            n_nz_shape,
             n_col_shape,
+            n_rhs_shape,
             Ax_shape,
             Ai_shape,
             Aj_shape,
@@ -70,6 +82,10 @@ def solve_xla_translation(c, Ax, Ai, Aj, b):
         ),
         shape_with_layout=b_shape,
     )
+    result = xla_client.ops.Transpose(
+        xla_client.ops.Reshape(result, (_n_rhs, _n_col)), (1, 0)
+    )
+    return xla_client.ops.Reshape(result, (_n_col,)+tuple(_n_rhs_list))
 
 
 xla.backend_specific_translations["cpu"][solve_prim] = solve_xla_translation
@@ -104,19 +120,21 @@ if __name__ == "__main__":
         ],
         dtype=jnp.float64,
     )
+    b = jnp.array([[8], [45], [-3], [3], [19]], dtype=jnp.float64)
     b = jnp.array([8, 45, -3, 3, 19], dtype=jnp.float64)
-    Ai, Aj = jnp.where(A > 0)
+    b = jnp.array([[8, 7], [45, 44], [-3, -4], [3, 2], [19, 18]], dtype=jnp.float64)
+    Ai, Aj = jnp.where(abs(A) > 0)
     Ax = A[Ai, Aj]
 
     t = time()
     result = solve(Ax, Ai, Aj, b)
-    print(f"{time()-t:.3e}", result[:5])
+    print(f"{time()-t:.3e}", result)
 
     solve = jax.jit(solve)
     t = time()
     result = solve(Ax, Ai, Aj, b)
-    print(f"{time()-t:.3e}", result[:5])
+    print(f"{time()-t:.3e}", result)
 
     t = time()
     result = solve(Ax, Ai, Aj, b)
-    print(f"{time()-t:.3e}", result[:5])
+    print(f"{time()-t:.3e}", result)
