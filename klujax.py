@@ -52,17 +52,15 @@ def solve_xla_translation(c, Ax, Ai, Aj, b):
     Ai_shape = c.get_shape(Ai)
     Aj_shape = c.get_shape(Aj)
     b_shape = c.get_shape(b)
-    n_nz = xla_client.ops.ConstantLiteral(c, np.int32(Ax_shape.dimensions()[0]))
-    _n_col, *_n_rhs_list = b_shape.dimensions()
+    _n_nz, = Ax_shape.dimensions()
+    _n_col, *_n_rhs_list = orig_b_shape = b_shape.dimensions()
+    _n_rhs = np.prod([1]+_n_rhs_list)
+    b = xla_client.ops.Reshape(b, (_n_col, _n_rhs))
+    b = xla_client.ops.Transpose(b, (1, 0))
+    b = xla_client.ops.Reshape(b, (_n_rhs*_n_col,))
+    b_shape = c.get_shape(b)
+    n_nz = xla_client.ops.ConstantLiteral(c, np.int32(_n_nz))
     n_col = xla_client.ops.ConstantLiteral(c, np.int32(_n_col))
-    if _n_rhs_list:
-        _n_rhs = np.prod(_n_rhs_list)
-        b = xla_client.ops.Reshape(
-            xla_client.ops.Transpose(b, (1, 0)), (_n_col * _n_rhs,)
-        )
-        b_shape = c.get_shape(b)
-    else:
-        _n_rhs = 1
     n_rhs = xla_client.ops.ConstantLiteral(c, np.int32(_n_rhs))
     n_nz_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
     n_col_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
@@ -82,10 +80,10 @@ def solve_xla_translation(c, Ax, Ai, Aj, b):
         ),
         shape_with_layout=b_shape,
     )
-    result = xla_client.ops.Transpose(
-        xla_client.ops.Reshape(result, (_n_rhs, _n_col)), (1, 0)
-    )
-    return xla_client.ops.Reshape(result, (_n_col,)+tuple(_n_rhs_list))
+    result = xla_client.ops.Reshape(result, (_n_rhs, _n_col))
+    result = xla_client.ops.Transpose(result, (1, 0))
+    result = xla_client.ops.Reshape(result, orig_b_shape)
+    return result
 
 
 xla.backend_specific_translations["cpu"][solve_prim] = solve_xla_translation
@@ -121,8 +119,8 @@ if __name__ == "__main__":
         dtype=jnp.float64,
     )
     b = jnp.array([[8], [45], [-3], [3], [19]], dtype=jnp.float64)
-    b = jnp.array([8, 45, -3, 3, 19], dtype=jnp.float64)
     b = jnp.array([[8, 7], [45, 44], [-3, -4], [3, 2], [19, 18]], dtype=jnp.float64)
+    b = jnp.array([8, 45, -3, 3, 19], dtype=jnp.float64)
     Ai, Aj = jnp.where(abs(A) > 0)
     Ax = A[Ai, Aj]
 
