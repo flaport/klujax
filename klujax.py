@@ -2,6 +2,7 @@ from time import time
 import numpy as np
 
 import jax
+from jax import lax
 
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
@@ -168,26 +169,56 @@ def solve_c128_xla_translation(c, Ax, Ai, Aj, b):
 xla.backend_specific_translations["cpu"][solve_f64] = solve_f64_xla_translation
 xla.backend_specific_translations["cpu"][solve_c128] = solve_c128_xla_translation
 
-
 # make differentiable
-# we'll work on this later...
-#
-# from jax.interpreters import ad
-#
-#
-# def solve_value_and_jvp(arg_values, arg_tangents):
-#     A, b = arg_values
-#     At, bt = arg_tangents
-#     primal_out = solve(A, b)
-#
-#     At = jnp.zeros_like(A) if isinstance(At, ad.Zero) else At
-#     bt = jnp.zeros_like(b) if isinstance(bt, ad.Zero) else bt
-#     output_tan = -b * At / A ** 2 + bt / A
-#     return primal_out, output_tan
-#
-# ad.primitive_jvps[solve_f64] = solve_value_and_jvp
+from jax.interpreters import ad
+
+
+def solve_f64_value_and_jvp(arg_values, arg_tangents):
+    # A x - b = 0
+    # ∂A x + A ∂x - ∂b = 0
+    # ∂x = A^{-1} (∂b - ∂A x)
+    Ax, Ai, Aj, b = arg_values
+    dAx, dAi, dAj, db = arg_tangents
+    dAx = dAx if not isinstance(dAx, ad.Zero) else lax.zeros_like_array(Ax)
+    dAi = dAi if not isinstance(dAi, ad.Zero) else lax.zeros_like_array(Ai)
+    dAj = dAj if not isinstance(dAj, ad.Zero) else lax.zeros_like_array(Aj)
+    db = db if not isinstance(db, ad.Zero) else lax.zeros_like_array(b)
+
+    x = solve(Ax, Ai, Aj, b)
+    dA_x = _sparse_coo_mat_vec_mul(dAx, Ai, Aj, x)
+    dx = solve(Ax, Ai, Aj, db - dA_x)
+
+    return x, dx
+
+
+def _sparse_coo_mat_vec_mul(Ax, Ai, Aj, b):
+    y = jnp.zeros_like(b)
+    return y.at[Ai].set(Ax * b[Aj])  # todo: make this work for non-coalesced A
+
+
+ad.primitive_jvps[solve_f64] = solve_f64_value_and_jvp
+
+
+def solve_f64_transpose(ct, Ax, Ai, Aj, b):
+    assert ad.is_undefined_primal(b)
+    ct_b = solve(Ax, Ai, Aj, ct)  # probably not correct...
+    return None, None, None, ct_b
+
+
+ad.primitive_transposes[solve_f64] = solve_f64_transpose
+
 
 if __name__ == "__main__":
+    A = jnp.array(
+        [
+            [2 + 3j, 3, 0, 0, 0],
+            [3, 0, 4, 0, 6],
+            [0, -1, -3, 2, 0],
+            [0, 0, 1, 0, 0],
+            [0, 4, 2, 0, 1],
+        ],
+        dtype=jnp.complex128,
+    )
     A = jnp.array(
         [
             [2, 3, 0, 0, 0],
@@ -200,8 +231,8 @@ if __name__ == "__main__":
     )
     b = jnp.array([[8], [45], [-3], [3], [19]], dtype=jnp.float64)
     b = jnp.array([[8, 7], [45, 44], [-3, -4], [3, 2], [19, 18]], dtype=jnp.float64)
-    b = jnp.array([8, 45, -3, 3, 19], dtype=jnp.float64)
     b = jnp.array([3 + 8j, 8 + 45j, 23 + -3j, -7 - 3j, 13 + 19j], dtype=jnp.complex128)
+    b = jnp.array([8, 45, -3, 3, 19], dtype=jnp.float64)
     Ai, Aj = jnp.where(abs(A) > 0)
     Ax = A[Ai, Aj]
 
@@ -216,4 +247,12 @@ if __name__ == "__main__":
 
     t = time()
     result = solve(Ax, Ai, Aj, b)
+    print(f"{time()-t:.3e}", result)
+
+    def solve_sum(Ax, Ai, Aj, b):
+        return solve(Ax, Ai, Aj, b).sum()
+
+    solve_sum_grad = jax.grad(solve_sum)
+    t = time()
+    result = solve_sum_grad(Ax, Ai, Aj, b)
     print(f"{time()-t:.3e}", result)
