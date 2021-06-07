@@ -18,8 +18,7 @@ def test_sparse_coo_matmul_f64():
     Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
     Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
     b = jax.random.normal(bkey, (n_col, n_rhs))
-    coo_vec_mul = jax.jit(klujax.coo_vec_mul)
-    x_sp = coo_vec_mul(Ax, Ai, Aj, b)
+    x_sp = klujax.coo_vec_mul(Ax, Ai, Aj, b)
 
     A = jnp.zeros((n_col, n_col), dtype=jnp.float64).at[Ai, Aj].add(Ax)
     x = A @ b

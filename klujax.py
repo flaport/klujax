@@ -45,40 +45,6 @@ solve_c128 = core.Primitive("solve_c128")
 coo_vec_mul_f64 = core.Primitive("coo_vec_mul_f64")
 
 
-## THE FUNCTIONS
-
-
-def solve(Ax, Ai, Aj, b):
-    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
-        Ax = jnp.stack([jnp.real(Ax), jnp.imag(Ax)], 1).ravel()
-        b = jnp.stack([jnp.real(b), jnp.imag(b)], 1).ravel()
-        result = solve_c128.bind(
-            Ax.astype(jnp.float64),
-            Ai.astype(jnp.int32),
-            Aj.astype(jnp.int32),
-            b.astype(jnp.float64),
-        )
-        result = result[::2] + 1j * result[1::2]
-    else:
-        result = solve_f64.bind(
-            Ax.astype(jnp.float64),
-            Ai.astype(jnp.int32),
-            Aj.astype(jnp.int32),
-            b.astype(jnp.float64),
-        )
-    return result
-
-
-def coo_vec_mul(Ax, Ai, Aj, b):
-    result = coo_vec_mul_f64.bind(
-        Ax.astype(jnp.float64),
-        Ai.astype(jnp.int32),
-        Aj.astype(jnp.int32),
-        b.astype(jnp.float64),
-    )
-    return result
-
-
 ## EXTRA DECORATORS
 
 
@@ -117,26 +83,17 @@ def transpose_register(primitive):
 
 @solve_f64.def_impl
 def solve_f64_impl(Ax, Ai, Aj, b):
-    A = jnp.zeros((b.shape[0], b.shape[0]), dtype=jnp.float64).at[Ai, Aj].add(Ax)
-    inv_A = jsp.linalg.inv(A)
-    return inv_A @ b.astype(jnp.float64)
+    raise NotImplementedError
 
 
 @solve_c128.def_impl
 def solve_c128_impl(Ax, Ai, Aj, b):
-    A = jnp.zeros((b.shape[0] // 2, b.shape[0] // 2), dtype=jnp.complex128)
-    A = A.at[Ai, Aj].add(Ax[::2]) + 1j * A.at[Ai, Aj].add(Ax[1::2])
-    b = b[::2] + 1j * b[1::2]
-    inv_A = jsp.linalg.inv(A)
-    result = inv_A @ b.astype(jnp.complex128)
-    result = jnp.stack([jnp.real(result), jnp.imag(result)], 1).ravel()
-    return result
+    raise NotImplementedError
 
 
 @coo_vec_mul_f64.def_impl
 def coo_vec_mul_f64_impl(Ax, Ai, Aj, b):
-    y = jnp.zeros_like(b)
-    return y.at[Ai].add(Ax * b[Aj])
+    raise NotImplementedError
 
 
 ## ABSTRACT EVALUATIONS
@@ -312,6 +269,42 @@ def solve_f64_transpose(ct, Ax, Ai, Aj, b):
     assert ad.is_undefined_primal(b)
     ct_b = solve(Ax, Ai, Aj, ct)  # probably not correct...
     return None, None, None, ct_b
+
+
+## THE FUNCTIONS
+
+
+@jax.jit  # jitting by default allows for empty implementation definitions
+def solve(Ax, Ai, Aj, b):
+    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
+        Ax = jnp.stack([jnp.real(Ax), jnp.imag(Ax)], 1).ravel()
+        b = jnp.stack([jnp.real(b), jnp.imag(b)], 1).ravel()
+        result = solve_c128.bind(
+            Ax.astype(jnp.float64),
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            b.astype(jnp.float64),
+        )
+        result = result[::2] + 1j * result[1::2]
+    else:
+        result = solve_f64.bind(
+            Ax.astype(jnp.float64),
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            b.astype(jnp.float64),
+        )
+    return result
+
+
+@jax.jit  # jitting by default allows for empty implementation definitions
+def coo_vec_mul(Ax, Ai, Aj, b):
+    result = coo_vec_mul_f64.bind(
+        Ax.astype(jnp.float64),
+        Ai.astype(jnp.int32),
+        Aj.astype(jnp.int32),
+        b.astype(jnp.float64),
+    )
+    return result
 
 
 # TEST SOME STUFF
