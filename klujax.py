@@ -1,6 +1,6 @@
 """ klujax: a KLU solver for JAX """
 
-__all__ = ["solve", "coo_vec_mul"]
+__all__ = ["solve", "mul_coo_vec"]
 
 ## IMPORTS
 
@@ -42,8 +42,8 @@ COMPLEX_DTYPES = (
 
 solve_f64 = core.Primitive("solve_f64")
 solve_c128 = core.Primitive("solve_c128")
-coo_vec_mul_f64 = core.Primitive("coo_vec_mul_f64")
-coo_vec_mul_c128 = core.Primitive("coo_vec_mul_c128")
+mul_coo_vec_f64 = core.Primitive("mul_coo_vec_f64")
+mul_coo_vec_c128 = core.Primitive("mul_coo_vec_c128")
 
 
 ## EXTRA DECORATORS
@@ -92,13 +92,13 @@ def solve_c128_impl(Ax, Ai, Aj, b):
     raise NotImplementedError
 
 
-@coo_vec_mul_f64.def_impl
-def coo_vec_mul_f64_impl(Ax, Ai, Aj, b):
+@mul_coo_vec_f64.def_impl
+def mul_coo_vec_f64_impl(Ax, Ai, Aj, b):
     raise NotImplementedError
 
 
-@coo_vec_mul_c128.def_impl
-def coo_vec_mul_c128_impl(Ax, Ai, Aj, b):
+@mul_coo_vec_c128.def_impl
+def mul_coo_vec_c128_impl(Ax, Ai, Aj, b):
     raise NotImplementedError
 
 
@@ -115,13 +115,13 @@ def solve_c128_abstract_eval(Ax, Ai, Aj, b):
     return abstract_arrays.ShapedArray(b.shape, b.dtype)
 
 
-@coo_vec_mul_f64.def_abstract_eval
-def coo_vec_mul_f64_abstract_eval(Ax, Ai, Aj, b):
+@mul_coo_vec_f64.def_abstract_eval
+def mul_coo_vec_f64_abstract_eval(Ax, Ai, Aj, b):
     return abstract_arrays.ShapedArray(b.shape, b.dtype)
 
 
-@coo_vec_mul_c128.def_abstract_eval
-def coo_vec_mul_c128_abstract_eval(Ax, Ai, Aj, b):
+@mul_coo_vec_c128.def_abstract_eval
+def mul_coo_vec_c128_abstract_eval(Ax, Ai, Aj, b):
     return abstract_arrays.ShapedArray(b.shape, b.dtype)
 
 
@@ -222,14 +222,14 @@ def solve_c128_xla_translation(c, Ax, Ai, Aj, b):
     return _xla_coo_vec_operation_c128(c, Ax, Ai, Aj, b, "solve_c128")
 
 
-@xla_register_cpu(coo_vec_mul_f64, klujax_cpp.coo_vec_mul_f64)
-def coo_vec_mul_f64_xla_translation(c, Ax, Ai, Aj, b):
-    return _xla_coo_vec_operation_f64(c, Ax, Ai, Aj, b, "coo_vec_mul_f64")
+@xla_register_cpu(mul_coo_vec_f64, klujax_cpp.mul_coo_vec_f64)
+def mul_coo_vec_f64_xla_translation(c, Ax, Ai, Aj, b):
+    return _xla_coo_vec_operation_f64(c, Ax, Ai, Aj, b, "mul_coo_vec_f64")
 
 
-@xla_register_cpu(coo_vec_mul_c128, klujax_cpp.coo_vec_mul_c128)
-def coo_vec_mul_c128_xla_translation(c, Ax, Ai, Aj, b):
-    return _xla_coo_vec_operation_c128(c, Ax, Ai, Aj, b, "coo_vec_mul_c128")
+@xla_register_cpu(mul_coo_vec_c128, klujax_cpp.mul_coo_vec_c128)
+def mul_coo_vec_c128_xla_translation(c, Ax, Ai, Aj, b):
+    return _xla_coo_vec_operation_c128(c, Ax, Ai, Aj, b, "mul_coo_vec_c128")
 
 
 # ENABLE FORWARD GRAD
@@ -248,7 +248,7 @@ def solve_f64_value_and_jvp(arg_values, arg_tangents):
     db = db if not isinstance(db, ad.Zero) else lax.zeros_like_array(b)
 
     x = solve(Ax, Ai, Aj, b)
-    dA_x = coo_vec_mul(dAx, Ai, Aj, x)
+    dA_x = mul_coo_vec(dAx, Ai, Aj, x)
     dx = solve(Ax, Ai, Aj, db)  # - dA_x)
 
     return x, dx
@@ -290,11 +290,11 @@ def solve(Ax, Ai, Aj, b):
 
 
 @jax.jit  # jitting by default allows for empty implementation definitions
-def coo_vec_mul(Ax, Ai, Aj, b):
+def mul_coo_vec(Ax, Ai, Aj, b):
     if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
         Ax = jnp.stack([jnp.real(Ax), jnp.imag(Ax)], 1).ravel()
         b = jnp.stack([jnp.real(b), jnp.imag(b)], 1).reshape(-1, *b.shape[1:])
-        result = coo_vec_mul_c128.bind(
+        result = mul_coo_vec_c128.bind(
             Ax.astype(jnp.float64),
             Ai.astype(jnp.int32),
             Aj.astype(jnp.int32),
@@ -302,7 +302,7 @@ def coo_vec_mul(Ax, Ai, Aj, b):
         )
         result = result[::2] + 1j * result[1::2]
     else:
-        result = coo_vec_mul_f64.bind(
+        result = mul_coo_vec_f64.bind(
             Ax.astype(jnp.float64),
             Ai.astype(jnp.int32),
             Aj.astype(jnp.int32),

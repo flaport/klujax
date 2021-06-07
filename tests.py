@@ -50,7 +50,7 @@ def test_solve_c128():
     np.testing.assert_array_almost_equal(x_sp, x)
 
 
-def test_coo_vec_mul_f64():
+def test_mul_coo_vec_f64():
     n_nz = 8
     n_col = 5
     n_rhs = 1
@@ -59,7 +59,7 @@ def test_coo_vec_mul_f64():
     Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
     Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
     b = jax.random.normal(bkey, (n_col, n_rhs))
-    x_sp = klujax.coo_vec_mul(Ax, Ai, Aj, b)
+    x_sp = klujax.mul_coo_vec(Ax, Ai, Aj, b)
 
     A = jnp.zeros((n_col, n_col), dtype=jnp.float64).at[Ai, Aj].add(Ax)
     x = A @ b
@@ -69,7 +69,7 @@ def test_coo_vec_mul_f64():
     np.testing.assert_array_almost_equal(x_sp, x)
 
 
-def test_coo_vec_mul_c128():
+def test_mul_coo_vec_c128():
     n_nz = 8
     n_col = 5
     n_rhs = 1
@@ -80,7 +80,7 @@ def test_coo_vec_mul_c128():
     Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
     b_r, b_i = jax.random.normal(bkey, (2, n_col, n_rhs))
     b = b_r + 1j * b_i
-    x_sp = klujax.coo_vec_mul(Ax, Ai, Aj, b)
+    x_sp = klujax.mul_coo_vec(Ax, Ai, Aj, b)
 
     A = jnp.zeros((n_col, n_col), dtype=jnp.complex128).at[Ai, Aj].add(Ax)
     x = A @ b
@@ -93,5 +93,5 @@ def test_coo_vec_mul_c128():
 if __name__ == "__main__":
     test_solve_f64()
     test_solve_c128()
-    test_coo_vec_mul_f64()
-    test_coo_vec_mul_c128()
+    test_mul_coo_vec_f64()
+    test_mul_coo_vec_c128()

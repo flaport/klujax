@@ -156,7 +156,7 @@ void solve_c128(void *out, void **in) {
   _klu_z_solve(n_col, n_rhs, Bx, Bi, Bp, /*b=*/result);
 }
 
-void coo_vec_mul_f64(void *out, void **in) {
+void mul_coo_vec_f64(void *out, void **in) {
   // get args
   int n_nz = *reinterpret_cast<int *>(in[0]);
   int n_col = *reinterpret_cast<int *>(in[1]);
@@ -180,7 +180,7 @@ void coo_vec_mul_f64(void *out, void **in) {
   }
 }
 
-void coo_vec_mul_c128(void *out, void **in) {
+void mul_coo_vec_c128(void *out, void **in) {
   // get args
   int n_nz = *reinterpret_cast<int *>(in[0]);
   int n_col = *reinterpret_cast<int *>(in[1]);
@@ -225,17 +225,19 @@ PYBIND11_MODULE(klujax_cpp, m) {
       },
       "solve a complex-valued linear system of equations");
   m.def(
-      "coo_vec_mul_f64",
+      "mul_coo_vec_f64",
       []() {
         const char *name = "xla._CUSTOM_CALL_TARGET";
-        return py::capsule((void *)&coo_vec_mul_f64, name);
+        return py::capsule((void *)&mul_coo_vec_f64, name);
       },
       "matmul of real-valued sparse COO matrix with dense vector");
   m.def(
-      "coo_vec_mul_c128",
+      "mul_coo_vec_c128",
       []() {
         const char *name = "xla._CUSTOM_CALL_TARGET";
-        return py::capsule((void *)&coo_vec_mul_c128, name);
+        return py::capsule((void *)&mul_coo_vec_c128, name);
       },
       "matmul of real-valued sparse COO matrix with dense vector");
+  m.def("nnz_mul_csc_csc", &nnz_mul_csc_csc,
+        "Number of nonzero elements in sparse matrix multiplication result");
 }
