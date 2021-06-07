@@ -1,3 +1,9 @@
+""" klujax: a KLU solver for JAX """
+
+__all__ = ["solve", "coo_vec_mul"]
+
+## IMPORTS
+
 from time import time
 
 import numpy as np
@@ -20,6 +26,9 @@ import jax.scipy as jsp
 
 import klujax_cpp
 
+
+## CONSTANTS
+
 COMPLEX_DTYPES = (
     np.complex64,
     np.complex128,
@@ -30,9 +39,12 @@ COMPLEX_DTYPES = (
 
 ## PRIMITIVES
 
-solve_f64 = core.Primitive("klu_solve_f64")
-solve_c128 = core.Primitive("klu_solve_c128")
+solve_f64 = core.Primitive("solve_f64")
+solve_c128 = core.Primitive("solve_c128")
 coo_vec_mul_f64 = core.Primitive("coo_vec_mul_f64")
+
+
+## THE FUNCTIONS
 
 
 def solve(Ax, Ai, Aj, b):
@@ -64,6 +76,39 @@ def coo_vec_mul(Ax, Ai, Aj, b):
         b.astype(jnp.float64),
     )
     return result
+
+
+## EXTRA DECORATORS
+
+
+def xla_register_cpu(primitive, cpp_fun):
+    name = primitive.name.encode()
+
+    def decorator(fun):
+        xla_client.register_cpu_custom_call_target(
+            name,
+            cpp_fun(),
+        )
+        xla.backend_specific_translations["cpu"][primitive] = fun
+        return fun
+
+    return decorator
+
+
+def ad_register(primitive):
+    def decorator(fun):
+        ad.primitive_jvps[primitive] = fun
+        return fun
+
+    return decorator
+
+
+def transpose_register(primitive):
+    def decorator(fun):
+        ad.primitive_transposes[primitive] = fun
+        return fun
+
+    return decorator
 
 
 ## IMPLEMENTATIONS
@@ -113,12 +158,8 @@ def coo_vec_mul_f64_abstract_eval(Ax, Ai, Aj, b):
 
 # ENABLE JIT
 
-xla_client.register_cpu_custom_call_target(
-    b"solve_f64",
-    klujax_cpp.solve_f64(),
-)
 
-
+@xla_register_cpu(solve_f64, klujax_cpp.solve_f64)
 def solve_f64_xla_translation(c, Ax, Ai, Aj, b):
     Ax_shape = c.get_shape(Ax)
     Ai_shape = c.get_shape(Ai)
@@ -158,15 +199,7 @@ def solve_f64_xla_translation(c, Ax, Ai, Aj, b):
     return result
 
 
-xla.backend_specific_translations["cpu"][solve_f64] = solve_f64_xla_translation
-
-
-xla_client.register_cpu_custom_call_target(
-    b"solve_c128",
-    klujax_cpp.solve_c128(),
-)
-
-
+@xla_register_cpu(solve_c128, klujax_cpp.solve_c128)
 def solve_c128_xla_translation(c, Ax, Ai, Aj, b):
     Ax_shape = c.get_shape(Ax)
     Ai_shape = c.get_shape(Ai)
@@ -208,15 +241,7 @@ def solve_c128_xla_translation(c, Ax, Ai, Aj, b):
     return result
 
 
-xla.backend_specific_translations["cpu"][solve_c128] = solve_c128_xla_translation
-
-
-xla_client.register_cpu_custom_call_target(
-    b"coo_vec_mul_f64",
-    klujax_cpp.coo_vec_mul_f64(),
-)
-
-
+@xla_register_cpu(coo_vec_mul_f64, klujax_cpp.coo_vec_mul_f64)
 def coo_vec_mul_f64_xla_translation(c, Ax, Ai, Aj, b):
     Ax_shape = c.get_shape(Ax)
     Ai_shape = c.get_shape(Ai)
@@ -256,13 +281,10 @@ def coo_vec_mul_f64_xla_translation(c, Ax, Ai, Aj, b):
     return result
 
 
-xla.backend_specific_translations["cpu"][
-    coo_vec_mul_f64
-] = coo_vec_mul_f64_xla_translation
-
-# ENABLE GRAD
+# ENABLE FORWARD GRAD
 
 
+@ad_register(solve_f64)
 def solve_f64_value_and_jvp(arg_values, arg_tangents):
     # A x - b = 0
     # ∂A x + A ∂x - ∂b = 0
@@ -276,22 +298,22 @@ def solve_f64_value_and_jvp(arg_values, arg_tangents):
 
     x = solve(Ax, Ai, Aj, b)
     dA_x = coo_vec_mul(dAx, Ai, Aj, x)
-    dx = solve(Ax, Ai, Aj, db - dA_x)
+    dx = solve(Ax, Ai, Aj, db)  # - dA_x)
 
     return x, dx
 
 
-ad.primitive_jvps[solve_f64] = solve_f64_value_and_jvp
+# ENABLE BACKWARD GRAD
 
 
+@transpose_register(solve_f64)
 def solve_f64_transpose(ct, Ax, Ai, Aj, b):
     assert ad.is_undefined_primal(b)
     ct_b = solve(Ax, Ai, Aj, ct)  # probably not correct...
     return None, None, None, ct_b
 
 
-ad.primitive_transposes[solve_f64] = solve_f64_transpose
-
+# TEST SOME STUFF
 
 if __name__ == "__main__":
     A = jnp.array(
@@ -334,10 +356,10 @@ if __name__ == "__main__":
     result = solve(Ax, Ai, Aj, b)
     print(f"{time()-t:.3e}", result)
 
-    # def solve_sum(Ax, Ai, Aj, b):
-    #     return solve(Ax, Ai, Aj, b).sum()
+    def solve_sum(Ax, Ai, Aj, b):
+        return solve(Ax, Ai, Aj, b).sum()
 
-    # solve_sum_grad = jax.grad(solve_sum)
-    # t = time()
-    # result = solve_sum_grad(Ax, Ai, Aj, b)
-    # print(f"{time()-t:.3e}", result)
+    solve_sum_grad = jax.grad(solve_sum)
+    t = time()
+    result = solve_sum_grad(Ax, Ai, Aj, b)
+    print(f"{time()-t:.3e}", result)
