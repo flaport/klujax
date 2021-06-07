@@ -173,8 +173,10 @@ void coo_vec_mul_f64(void *out, void **in) {
   }
 
   // fill result
-  for (int k = 0; k < n_nz; k++) {
-    result[Ai[k]] += Ax[k] * b[Aj[k]];
+  for (int l = 0; l < n_rhs; l++) {
+    for (int k = 0; k < n_nz; k++) {
+      result[Ai[k]+l*n_col] += Ax[k] * b[Aj[k]+l*n_col];
+    }
   }
 }
 

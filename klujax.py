@@ -11,6 +11,7 @@ import numpy as np
 import jax
 
 jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_platform_name", "cpu")
 
 from jax import lax
 from jax import core
@@ -116,7 +117,7 @@ def transpose_register(primitive):
 
 @solve_f64.def_impl
 def solve_f64_impl(Ax, Ai, Aj, b):
-    A = jnp.zeros((b.shape[0], b.shape[0]), dtype=jnp.float64).at[Ai, Aj].set(Ax)
+    A = jnp.zeros((b.shape[0], b.shape[0]), dtype=jnp.float64).at[Ai, Aj].add(Ax)
     inv_A = jsp.linalg.inv(A)
     return inv_A @ b.astype(jnp.float64)
 
@@ -124,7 +125,7 @@ def solve_f64_impl(Ax, Ai, Aj, b):
 @solve_c128.def_impl
 def solve_c128_impl(Ax, Ai, Aj, b):
     A = jnp.zeros((b.shape[0] // 2, b.shape[0] // 2), dtype=jnp.complex128)
-    A = A.at[Ai, Aj].set(Ax[::2]) + 1j * A.at[Ai, Aj].set(Ax[1::2])
+    A = A.at[Ai, Aj].add(Ax[::2]) + 1j * A.at[Ai, Aj].add(Ax[1::2])
     b = b[::2] + 1j * b[1::2]
     inv_A = jsp.linalg.inv(A)
     result = inv_A @ b.astype(jnp.complex128)
@@ -135,7 +136,7 @@ def solve_c128_impl(Ax, Ai, Aj, b):
 @coo_vec_mul_f64.def_impl
 def coo_vec_mul_f64_impl(Ax, Ai, Aj, b):
     y = jnp.zeros_like(b)
-    return y.at[Ai].set(Ax * b[Aj])  # todo: make this work for non-coalesced A
+    return y.at[Ai].add(Ax * b[Aj])
 
 
 ## ABSTRACT EVALUATIONS

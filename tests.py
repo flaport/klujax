@@ -1,7 +1,13 @@
-import jax; jax.config.update("jax_enable_x64", True)
+import numpy as np
+
+import jax
+
+jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_platform_name", "cpu")
 import jax.numpy as jnp
 
 import klujax
+
 
 def test_sparse_coo_matmul_f64():
     n_nz = 8
@@ -12,12 +18,12 @@ def test_sparse_coo_matmul_f64():
     Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
     Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
     b = jax.random.normal(bkey, (n_col, n_rhs))
-    print(Ax)
-    print(Ai)
-    print(Aj)
-    print(b)
     coo_vec_mul = jax.jit(klujax.coo_vec_mul)
-    x = coo_vec_mul(Ax, Ai, Aj, b)
+    x_sp = coo_vec_mul(Ax, Ai, Aj, b)
 
+    A = jnp.zeros((n_col, n_col), dtype=jnp.float64).at[Ai, Aj].add(Ax)
+    x = A @ b
+
+    np.testing.assert_array_almost_equal(x_sp, x)
 
 test_sparse_coo_matmul_f64()
