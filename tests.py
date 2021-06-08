@@ -50,6 +50,28 @@ def test_solve_c128():
     np.testing.assert_array_almost_equal(x_sp, x)
 
 
+def test_solve_f64_vmap():
+    n_lhs = 23
+    n_nz = 8
+    n_col = 5
+    n_rhs = 1
+    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
+    Ax = jax.random.normal(Axkey, (n_lhs, n_nz))
+    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
+    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
+    b = jax.random.normal(bkey, (n_lhs, n_col, n_rhs))
+
+    vsolve = jax.vmap(klujax.solve, in_axes=(None, None, 0, 0), out_axes=0)
+    x_sp = vsolve(Ai, Aj, Ax, b)
+
+    A = jnp.zeros((n_lhs, n_col, n_col), dtype=jnp.float64).at[:, Ai, Aj].add(Ax)
+    x = jsp.linalg.solve(A, b)
+
+    print(x[:2])
+    print(x_sp[:2])
+    np.testing.assert_array_almost_equal(x_sp, x)
+
+
 def test_mul_coo_vec_f64():
     n_nz = 8
     n_col = 5
@@ -93,5 +115,6 @@ def test_mul_coo_vec_c128():
 if __name__ == "__main__":
     test_solve_f64()
     test_solve_c128()
+    test_solve_f64_vmap()
     test_mul_coo_vec_f64()
     test_mul_coo_vec_c128()

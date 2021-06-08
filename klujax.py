@@ -6,27 +6,19 @@ __all__ = ["solve", "mul_coo_vec"]
 
 from time import time
 
-import numpy as np
-
 import jax
+import numpy as np
 
 jax.config.update("jax_enable_x64", True)
 jax.config.update("jax_platform_name", "cpu")
 
-from jax import lax
-from jax import core
-from jax import abstract_arrays
-
-from jax.interpreters import ad
-
-from jax.lib import xla_client
-from jax.interpreters import xla
-
 import jax.numpy as jnp
 import jax.scipy as jsp
+from jax import abstract_arrays, core, lax
+from jax.interpreters import ad, batching, xla
+from jax.lib import xla_client
 
 import klujax_cpp
-
 
 ## CONSTANTS
 
@@ -74,6 +66,14 @@ def ad_register(primitive):
 def transpose_register(primitive):
     def decorator(fun):
         ad.primitive_transposes[primitive] = fun
+        return fun
+
+    return decorator
+
+
+def vmap_register(primitive):
+    def decorator(fun):
+        batching.primitive_batchers[primitive] = fun
         return fun
 
     return decorator
@@ -262,6 +262,58 @@ def solve_f64_transpose(ct, Ai, Aj, Ax, b):
     assert ad.is_undefined_primal(b)
     ct_b = solve(Ai, Aj, Ax, ct)  # probably not correct...
     return None, None, None, ct_b
+
+
+# ENABLE VMAP
+
+
+def _coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
+    aAi, aAj, aAx, ab = batch_axes
+    Ai, Aj, Ax, b = vector_arg_values
+
+    assert aAi is None, "Ai cannot be vectorized."
+    assert aAj is None, "Aj cannot be vectorized."
+
+    if aAx is not None and ab is not None:
+        assert isinstance(aAx, int) and isinstance(ab, int)
+        n_lhs = Ax.shape[aAx]
+        assert (
+            b.shape[ab] == n_lhs
+        ), f"axis {aAx} of Ax and axis {ab} of b differ in size ({n_lhs} != {b.shape[ab]})"
+        if ab != 0:
+            Ax = jnp.moveaxis(Ax, aAx, 0)
+        if ab != 0:
+            b = jnp.moveaxis(b, ab, 0)
+        x = jnp.stack([operation(Ai, Aj, Ax[i], b[i]) for i in range(n_lhs)], 0)
+        return x, 0
+
+    if aAx is None:
+        assert isinstance(ab, int)
+        n_lhs = b.shape[ab]
+        if ab != 0:
+            b = jnp.moveaxis(b, ab, 0)
+        x = jnp.stack([operation(Ai, Aj, Ax, b[i]) for i in range(n_lhs)], 0)
+        return x, 0
+
+    if ab is None:
+        assert isinstance(aAx, int)
+        n_lhs = Ax.shape[aAx]
+        if aAx != 0:
+            Ax = jnp.moveaxis(Ax, aAx, 0)
+        x = jnp.stack([operation(Ai, Aj, Ax[i], b) for i in range(n_lhs)], 0)
+        return x, 0
+
+
+#@vmap_register(solve_c128) # this segfaults...
+@vmap_register(solve_f64)
+def solve_vmap(vector_arg_values, batch_axes):
+    return _coo_vec_operation_vmap(solve, vector_arg_values, batch_axes)
+
+
+#@vmap_register(mul_coo_vec_c128) # this segfaults...
+@vmap_register(mul_coo_vec_f64)
+def mul_coo_vec_vmap(vector_arg_values, batch_axes):
+    return _coo_vec_operation_vmap(mul_coo_vec, vector_arg_values, batch_axes)
 
 
 ## THE FUNCTIONS
