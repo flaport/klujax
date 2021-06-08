@@ -13,7 +13,6 @@ jax.config.update("jax_enable_x64", True)
 jax.config.update("jax_platform_name", "cpu")
 
 import jax.numpy as jnp
-import jax.scipy as jsp
 from jax import abstract_arrays, core, lax
 from jax.interpreters import ad, batching, xla
 from jax.lib import xla_client
@@ -172,14 +171,31 @@ def _xla_coo_vec_operation_f64(c, Ai, Aj, Ax, b, name):
 def _xla_coo_vec_operation_c128(c, Ai, Aj, Ax, b, name):
     if isinstance(name, str):
         name = name.encode()
+
+    # Ax = jnp.stack([jnp.real(Ax), jnp.imag(Ax)], 1).ravel()
+    (_Anz,) = c.get_shape(Ax).dimensions()
+    rAx = xla_client.ops.Real(Ax)
+    iAx = xla_client.ops.Imag(Ax)
+    rAx = xla_client.ops.BroadcastInDim(rAx, [_Anz, 1], [0])  # rAx[:, None]
+    iAx = xla_client.ops.BroadcastInDim(iAx, [_Anz, 1], [0])  # iAx[:, None]
+    Ax = xla_client.ops.ConcatInDim(c, [rAx, iAx], 1)
+    Ax = xla_client.ops.Reshape(Ax, [2 * _Anz])
+
+    # b = jnp.stack([jnp.real(b), jnp.imag(b)], 1).reshape(-1, *b.shape[1:])
+    _n_col, *_n_rhs_list = c.get_shape(b).dimensions()
+    rb = xla_client.ops.Real(b)
+    ib = xla_client.ops.Imag(b)
+    new_shape = [_n_col, 1, *_n_rhs_list]
+    broadcast_dims = [i for i in range(len(new_shape)) if i != 1]
+    rb = xla_client.ops.BroadcastInDim(rb, new_shape, broadcast_dims)  # rb[:, None]
+    ib = xla_client.ops.BroadcastInDim(ib, new_shape, broadcast_dims)  # ib[:, None]
+    b = xla_client.ops.ConcatInDim(c, [rb, ib], 1)
+    b = xla_client.ops.Reshape(b, [2 * _n_col, *_n_rhs_list])
+
     Ax_shape = c.get_shape(Ax)
     Ai_shape = c.get_shape(Ai)
     Aj_shape = c.get_shape(Aj)
     b_shape = c.get_shape(b)
-    (_Anz,) = Ax_shape.dimensions()
-    _Anz = _Anz // 2
-    _n_col, *_n_rhs_list = orig_b_shape = b_shape.dimensions()
-    _n_col = _n_col // 2
     _n_rhs = np.prod([1] + _n_rhs_list)
     b = xla_client.ops.Reshape(b, (2 * _n_col, _n_rhs))
     b = xla_client.ops.Transpose(b, (1, 0))
@@ -206,9 +222,23 @@ def _xla_coo_vec_operation_c128(c, Ai, Aj, Ax, b, name):
         ),
         shape_with_layout=b_shape,
     )
-    result = xla_client.ops.Reshape(result, (_n_rhs, 2 * _n_col))
-    result = xla_client.ops.Transpose(result, (1, 0))
-    result = xla_client.ops.Reshape(result, orig_b_shape)
+    result = xla_client.ops.Reshape(result, (_n_rhs, _n_col, 2))
+    result = xla_client.ops.Transpose(result, (2, 1, 0))
+    result = xla_client.ops.Reshape(result, [2, _n_col, *_n_rhs_list])
+    result_r = xla_client.ops.Slice(
+        result,
+        [0, 0, *(0 for _ in _n_rhs_list)],
+        [1, _n_col, *_n_rhs_list],
+        [1, 1, *(1 for _ in _n_rhs_list)],
+    )
+    result_i = xla_client.ops.Slice(
+        result,
+        [1, 0, *(0 for _ in _n_rhs_list)],
+        [2, _n_col, *_n_rhs_list],
+        [1, 1, *(1 for _ in _n_rhs_list)],
+    )
+    result = xla_client.ops.Complex(result_r, result_i)
+    result = xla_client.ops.Reshape(result, [_n_col, *_n_rhs_list])
     return result
 
 
@@ -304,13 +334,13 @@ def _coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
         return x, 0
 
 
-#@vmap_register(solve_c128) # this segfaults...
+# @vmap_register(solve_c128) # this segfaults...
 @vmap_register(solve_f64)
 def solve_vmap(vector_arg_values, batch_axes):
     return _coo_vec_operation_vmap(solve, vector_arg_values, batch_axes)
 
 
-#@vmap_register(mul_coo_vec_c128) # this segfaults...
+# @vmap_register(mul_coo_vec_c128) # this segfaults...
 @vmap_register(mul_coo_vec_f64)
 def mul_coo_vec_vmap(vector_arg_values, batch_axes):
     return _coo_vec_operation_vmap(mul_coo_vec, vector_arg_values, batch_axes)
@@ -322,15 +352,12 @@ def mul_coo_vec_vmap(vector_arg_values, batch_axes):
 @jax.jit  # jitting by default allows for empty implementation definitions
 def solve(Ai, Aj, Ax, b):
     if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
-        Ax = jnp.stack([jnp.real(Ax), jnp.imag(Ax)], 1).ravel()
-        b = jnp.stack([jnp.real(b), jnp.imag(b)], 1).reshape(-1, *b.shape[1:])
         result = solve_c128.bind(
             Ai.astype(jnp.int32),
             Aj.astype(jnp.int32),
-            Ax.astype(jnp.float64),
-            b.astype(jnp.float64),
+            Ax.astype(jnp.complex128),
+            b.astype(jnp.complex128),
         )
-        result = result[::2] + 1j * result[1::2]
     else:
         result = solve_f64.bind(
             Ai.astype(jnp.int32),
@@ -344,15 +371,12 @@ def solve(Ai, Aj, Ax, b):
 @jax.jit  # jitting by default allows for empty implementation definitions
 def mul_coo_vec(Ai, Aj, Ax, b):
     if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
-        Ax = jnp.stack([jnp.real(Ax), jnp.imag(Ax)], 1).ravel()
-        b = jnp.stack([jnp.real(b), jnp.imag(b)], 1).reshape(-1, *b.shape[1:])
         result = mul_coo_vec_c128.bind(
             Ai.astype(jnp.int32),
             Aj.astype(jnp.int32),
-            Ax.astype(jnp.float64),
-            b.astype(jnp.float64),
+            Ax.astype(jnp.complex128),
+            b.astype(jnp.complex128),
         )
-        result = result[::2] + 1j * result[1::2]
     else:
         result = mul_coo_vec_f64.bind(
             Ai.astype(jnp.int32),
