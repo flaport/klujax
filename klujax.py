@@ -334,13 +334,13 @@ def _coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
         return x, 0
 
 
-# @vmap_register(solve_c128) # this segfaults...
+@vmap_register(solve_c128)
 @vmap_register(solve_f64)
 def solve_vmap(vector_arg_values, batch_axes):
     return _coo_vec_operation_vmap(solve, vector_arg_values, batch_axes)
 
 
-# @vmap_register(mul_coo_vec_c128) # this segfaults...
+@vmap_register(mul_coo_vec_c128)
 @vmap_register(mul_coo_vec_f64)
 def mul_coo_vec_vmap(vector_arg_values, batch_axes):
     return _coo_vec_operation_vmap(mul_coo_vec, vector_arg_values, batch_axes)
