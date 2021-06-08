@@ -5,4 +5,5 @@ clean:
 	find . -name "build" | xargs rm -rf
 	find . -name "__pycache__" | xargs rm -rf
 	find . -name "*.so" | xargs rm -rf
+	find . -name "*.egg-info" | xargs rm -rf
 
