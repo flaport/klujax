@@ -6,8 +6,8 @@
 
 namespace py = pybind11;
 
-void _coo_to_csc(int n_nz, int n_col, double *Ax, int *Ai, int *Aj, double *Bx,
-                 int *Bi, int *Bp) {
+void _coo_to_csc(int n_col, int n_nz, int *Ai, int *Aj, double *Ax, int *Bi,
+                 int *Bp, double *Bx) {
 
   // compute number of non-zero entries per row of A
   for (int n = 0; n < n_nz; n++) {
@@ -42,8 +42,8 @@ void _coo_to_csc(int n_nz, int n_col, double *Ax, int *Ai, int *Aj, double *Bx,
   }
 }
 
-void _coo_z_to_csc_z(int n_nz, int n_col, double *Ax, int *Ai, int *Aj,
-                     double *Bx, int *Bi, int *Bp) {
+void _coo_z_to_csc_z(int n_col, int n_nz, int *Ai, int *Aj, double *Ax, int *Bi,
+                     int *Bp, double *Bx) {
 
   // compute number of non-zero entries per row of A
   for (int n = 0; n < n_nz; n++) {
@@ -79,7 +79,7 @@ void _coo_z_to_csc_z(int n_nz, int n_col, double *Ax, int *Ai, int *Aj,
   }
 }
 
-void _klu_solve(int n_col, int n_rhs, double *Ax, int *Ai, int *Ap, double *b) {
+void _klu_solve(int n_col, int n_rhs, int *Ai, int *Ap, double *Ax, double *b) {
   klu_symbolic *Symbolic;
   klu_numeric *Numeric;
   klu_common Common;
@@ -91,7 +91,7 @@ void _klu_solve(int n_col, int n_rhs, double *Ax, int *Ai, int *Ap, double *b) {
   klu_free_numeric(&Numeric, &Common);
 }
 
-void _klu_z_solve(int n_col, int n_rhs, double *Ax, int *Ai, int *Ap,
+void _klu_z_solve(int n_col, int n_rhs, int *Ai, int *Ap, double *Ax,
                   double *b) {
   klu_symbolic *Symbolic;
   klu_numeric *Numeric;
@@ -106,12 +106,12 @@ void _klu_z_solve(int n_col, int n_rhs, double *Ax, int *Ai, int *Ap,
 
 void solve_f64(void *out, void **in) {
   // get args
-  int n_nz = *reinterpret_cast<int *>(in[0]);
-  int n_col = *reinterpret_cast<int *>(in[1]);
-  int n_rhs = *reinterpret_cast<int *>(in[2]);
-  double *Ax = reinterpret_cast<double *>(in[3]);
-  int *Ai = reinterpret_cast<int *>(in[4]);
-  int *Aj = reinterpret_cast<int *>(in[5]);
+  int n_col = *reinterpret_cast<int *>(in[0]);
+  int n_rhs = *reinterpret_cast<int *>(in[1]);
+  int Anz = *reinterpret_cast<int *>(in[2]);
+  int *Ai = reinterpret_cast<int *>(in[3]);
+  int *Aj = reinterpret_cast<int *>(in[4]);
+  double *Ax = reinterpret_cast<double *>(in[5]);
   double *b = reinterpret_cast<double *>(in[6]);
   double *result = reinterpret_cast<double *>(out);
 
@@ -121,23 +121,23 @@ void solve_f64(void *out, void **in) {
   }
 
   // convert COO Ax, Ai, Ai to CSC Bx, Bi, Bp
-  double *Bx = new double[n_nz]();
-  int *Bi = new int[n_nz]();
+  double *Bx = new double[Anz]();
+  int *Bi = new int[Anz]();
   int *Bp = new int[n_col + 1]();
-  _coo_to_csc(n_nz, n_col, Ax, Ai, Aj, Bx, Bi, Bp);
+  _coo_to_csc(n_col, Anz, Ai, Aj, Ax, Bi, Bp, Bx);
 
   // solve using KLU
-  _klu_solve(n_col, n_rhs, Bx, Bi, Bp, /*b=*/result);
+  _klu_solve(n_col, n_rhs, Bi, Bp, Bx, /*b=*/result);
 }
 
 void solve_c128(void *out, void **in) {
   // get args
-  int n_nz = *reinterpret_cast<int *>(in[0]);
-  int n_col = *reinterpret_cast<int *>(in[1]);
-  int n_rhs = *reinterpret_cast<int *>(in[2]);
-  double *Ax = reinterpret_cast<double *>(in[3]);
-  int *Ai = reinterpret_cast<int *>(in[4]);
-  int *Aj = reinterpret_cast<int *>(in[5]);
+  int n_col = *reinterpret_cast<int *>(in[0]);
+  int n_rhs = *reinterpret_cast<int *>(in[1]);
+  int Anz = *reinterpret_cast<int *>(in[2]);
+  int *Ai = reinterpret_cast<int *>(in[3]);
+  int *Aj = reinterpret_cast<int *>(in[4]);
+  double *Ax = reinterpret_cast<double *>(in[5]);
   double *b = reinterpret_cast<double *>(in[6]);
   double *result = reinterpret_cast<double *>(out);
 
@@ -147,23 +147,23 @@ void solve_c128(void *out, void **in) {
   }
 
   // convert COO Ax, Ai, Ai to CSC Bx, Bi, Bp
-  double *Bx = new double[2 * n_nz]();
-  int *Bi = new int[n_nz]();
+  double *Bx = new double[2 * Anz]();
+  int *Bi = new int[Anz]();
   int *Bp = new int[n_col + 1]();
-  _coo_z_to_csc_z(n_nz, n_col, Ax, Ai, Aj, Bx, Bi, Bp);
+  _coo_z_to_csc_z(n_col, Anz, Ai, Aj, Ax, Bi, Bp, Bx);
 
   // solve using KLU
-  _klu_z_solve(n_col, n_rhs, Bx, Bi, Bp, /*b=*/result);
+  _klu_z_solve(n_col, n_rhs, Bi, Bp, Bx, /*b=*/result);
 }
 
 void mul_coo_vec_f64(void *out, void **in) {
   // get args
-  int n_nz = *reinterpret_cast<int *>(in[0]);
-  int n_col = *reinterpret_cast<int *>(in[1]);
-  int n_rhs = *reinterpret_cast<int *>(in[2]);
-  double *Ax = reinterpret_cast<double *>(in[3]);
-  int *Ai = reinterpret_cast<int *>(in[4]);
-  int *Aj = reinterpret_cast<int *>(in[5]);
+  int n_col = *reinterpret_cast<int *>(in[0]);
+  int n_rhs = *reinterpret_cast<int *>(in[1]);
+  int Anz = *reinterpret_cast<int *>(in[2]);
+  int *Ai = reinterpret_cast<int *>(in[3]);
+  int *Aj = reinterpret_cast<int *>(in[4]);
+  double *Ax = reinterpret_cast<double *>(in[5]);
   double *b = reinterpret_cast<double *>(in[6]);
   double *result = reinterpret_cast<double *>(out);
 
@@ -174,7 +174,7 @@ void mul_coo_vec_f64(void *out, void **in) {
 
   // fill result
   for (int l = 0; l < n_rhs; l++) {
-    for (int k = 0; k < n_nz; k++) {
+    for (int k = 0; k < Anz; k++) {
       result[Ai[k] + l * n_col] += Ax[k] * b[Aj[k] + l * n_col];
     }
   }
@@ -182,12 +182,12 @@ void mul_coo_vec_f64(void *out, void **in) {
 
 void mul_coo_vec_c128(void *out, void **in) {
   // get args
-  int n_nz = *reinterpret_cast<int *>(in[0]);
-  int n_col = *reinterpret_cast<int *>(in[1]);
-  int n_rhs = *reinterpret_cast<int *>(in[2]);
-  double *Ax = reinterpret_cast<double *>(in[3]);
-  int *Ai = reinterpret_cast<int *>(in[4]);
-  int *Aj = reinterpret_cast<int *>(in[5]);
+  int n_col = *reinterpret_cast<int *>(in[0]);
+  int n_rhs = *reinterpret_cast<int *>(in[1]);
+  int Anz = *reinterpret_cast<int *>(in[2]);
+  int *Ai = reinterpret_cast<int *>(in[3]);
+  int *Aj = reinterpret_cast<int *>(in[4]);
+  double *Ax = reinterpret_cast<double *>(in[5]);
   double *b = reinterpret_cast<double *>(in[6]);
   double *result = reinterpret_cast<double *>(out);
 
@@ -198,7 +198,7 @@ void mul_coo_vec_c128(void *out, void **in) {
 
   // fill result
   for (int l = 0; l < n_rhs; l++) {
-    for (int k = 0; k < n_nz; k++) {
+    for (int k = 0; k < Anz; k++) {
       result[2 * (Ai[k] + l * n_col)] +=                  // real part
           Ax[2 * k] * b[2 * (Aj[k] + l * n_col)] -        // real * real
           Ax[2 * k + 1] * b[2 * (Aj[k] + l * n_col) + 1]; // imag * imag
@@ -238,6 +238,4 @@ PYBIND11_MODULE(klujax_cpp, m) {
         return py::capsule((void *)&mul_coo_vec_c128, name);
       },
       "matmul of real-valued sparse COO matrix with dense vector");
-  m.def("nnz_mul_csc_csc", &nnz_mul_csc_csc,
-        "Number of nonzero elements in sparse matrix multiplication result");
 }

@@ -19,10 +19,10 @@ def test_solve_f64():
     Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
     Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
     b = jax.random.normal(bkey, (n_col, n_rhs))
-    x_sp = klujax.solve(Ax, Ai, Aj, b)
+    x_sp = klujax.solve(Ai, Aj, Ax, b)
 
     A = jnp.zeros((n_col, n_col), dtype=jnp.float64).at[Ai, Aj].add(Ax)
-    x = jsp.linalg.inv(A) @ b
+    x = jsp.linalg.solve(A, b)
 
     print(x)
     print(x_sp)
@@ -40,10 +40,10 @@ def test_solve_c128():
     Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
     b_r, b_i = jax.random.normal(bkey, (2, n_col, n_rhs))
     b = b_r + 1j * b_i
-    x_sp = klujax.solve(Ax, Ai, Aj, b)
+    x_sp = klujax.solve(Ai, Aj, Ax, b)
 
     A = jnp.zeros((n_col, n_col), dtype=jnp.complex128).at[Ai, Aj].add(Ax)
-    x = jsp.linalg.inv(A) @ b
+    x = jsp.linalg.solve(A, b)
 
     print(x)
     print(x_sp)
@@ -59,7 +59,7 @@ def test_mul_coo_vec_f64():
     Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
     Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
     b = jax.random.normal(bkey, (n_col, n_rhs))
-    x_sp = klujax.mul_coo_vec(Ax, Ai, Aj, b)
+    x_sp = klujax.mul_coo_vec(Ai, Aj, Ax, b)
 
     A = jnp.zeros((n_col, n_col), dtype=jnp.float64).at[Ai, Aj].add(Ax)
     x = A @ b
@@ -80,7 +80,7 @@ def test_mul_coo_vec_c128():
     Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
     b_r, b_i = jax.random.normal(bkey, (2, n_col, n_rhs))
     b = b_r + 1j * b_i
-    x_sp = klujax.mul_coo_vec(Ax, Ai, Aj, b)
+    x_sp = klujax.mul_coo_vec(Ai, Aj, Ax, b)
 
     A = jnp.zeros((n_col, n_col), dtype=jnp.complex128).at[Ai, Aj].add(Ax)
     x = A @ b
