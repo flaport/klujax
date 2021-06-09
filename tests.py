@@ -102,6 +102,6 @@ def test_solve_c128_vmap():
 
 if __name__ == "__main__":
     test_solve_f64()
-    test_solve_c128()
+    # test_solve_c128()
     test_solve_f64_vmap()
-    test_solve_c128_vmap()
+    # test_solve_c128_vmap()

@@ -107,16 +107,17 @@ void _klu_z_solve(int n_col, int n_rhs, int *Ai, int *Ap, double *Ax,
 void solve_f64(void *out, void **in) {
   // get args
   int n_col = *reinterpret_cast<int *>(in[0]);
-  int n_rhs = *reinterpret_cast<int *>(in[1]);
-  int Anz = *reinterpret_cast<int *>(in[2]);
-  int *Ai = reinterpret_cast<int *>(in[3]);
-  int *Aj = reinterpret_cast<int *>(in[4]);
-  double *Ax = reinterpret_cast<double *>(in[5]);
-  double *b = reinterpret_cast<double *>(in[6]);
+  int n_lhs = *reinterpret_cast<int *>(in[1]);
+  int n_rhs = *reinterpret_cast<int *>(in[2]);
+  int Anz = *reinterpret_cast<int *>(in[3]);
+  int *Ai = reinterpret_cast<int *>(in[4]);
+  int *Aj = reinterpret_cast<int *>(in[5]);
+  double *Ax = reinterpret_cast<double *>(in[6]);
+  double *b = reinterpret_cast<double *>(in[7]);
   double *result = reinterpret_cast<double *>(out);
 
   // copy b into result
-  for (int i = 0; i < n_col * n_rhs; i++) {
+  for (int i = 0; i < n_lhs * n_col * n_rhs; i++) {
     result[i] = b[i];
   }
 
@@ -124,10 +125,37 @@ void solve_f64(void *out, void **in) {
   double *Bx = new double[Anz]();
   int *Bi = new int[Anz]();
   int *Bp = new int[n_col + 1]();
-  _coo_to_csc(n_col, Anz, Ai, Aj, Ax, Bi, Bp, Bx);
+  _coo_to_csc(n_col, Anz, Ai, Aj, &Ax[0], Bi, Bp, Bx);
 
   // solve using KLU
-  _klu_solve(n_col, n_rhs, Bi, Bp, Bx, /*b=*/result);
+  klu_symbolic *Symbolic;
+  klu_numeric *Numeric;
+  klu_common Common;
+  klu_defaults(&Common);
+  Symbolic = klu_analyze(n_col, Bp, Bi, &Common);
+  Numeric = klu_factor(Bp, Bi, Bx, Symbolic, &Common);
+  klu_solve(Symbolic, Numeric, n_col, n_rhs, &result[0], &Common);
+
+  for (int i = 1; i < n_lhs; i++) {
+    int m = i * Anz;
+    int n = i * n_rhs * n_col;
+
+    // convert COO Ax, Ai, Ai to CSC Bx, Bi, Bp
+    double *Bx = new double[Anz]();
+    int *Bi = new int[Anz]();
+    int *Bp = new int[n_col + 1]();
+    _coo_to_csc(n_col, Anz, Ai, Aj, &Ax[m], Bi, Bp, Bx);
+
+    // solve using KLU
+    Numeric = klu_factor(Bp, Bi, Bx, Symbolic, &Common);
+    klu_solve(Symbolic, Numeric, n_col, n_rhs, &result[n], &Common);
+
+    delete[] Bx;
+    delete[] Bi;
+    delete[] Bp;
+  }
+  klu_free_symbolic(&Symbolic, &Common);
+  klu_free_numeric(&Numeric, &Common);
 }
 
 void solve_c128(void *out, void **in) {
