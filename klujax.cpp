@@ -9,6 +9,11 @@ namespace py = pybind11;
 void _coo_to_csc(int n_col, int n_nz, int *Ai, int *Aj, double *Ax, int *Bi,
                  int *Bp, double *Bx) {
 
+  // fill Bp with zeros
+  for (int n = 0; n < n_col + 1; n++) {
+    Bp[n] = 0.0;
+  }
+
   // compute number of non-zero entries per row of A
   for (int n = 0; n < n_nz; n++) {
     Bp[Aj[n]] += 1;
@@ -79,18 +84,6 @@ void _coo_z_to_csc_z(int n_col, int n_nz, int *Ai, int *Aj, double *Ax, int *Bi,
   }
 }
 
-void _klu_solve(int n_col, int n_rhs, int *Ai, int *Ap, double *Ax, double *b) {
-  klu_symbolic *Symbolic;
-  klu_numeric *Numeric;
-  klu_common Common;
-  klu_defaults(&Common);
-  Symbolic = klu_analyze(n_col, Ap, Ai, &Common);
-  Numeric = klu_factor(Ap, Ai, Ax, Symbolic, &Common);
-  klu_solve(Symbolic, Numeric, n_col, n_rhs, b, &Common);
-  klu_free_symbolic(&Symbolic, &Common);
-  klu_free_numeric(&Numeric, &Common);
-}
-
 void _klu_z_solve(int n_col, int n_rhs, int *Ai, int *Ap, double *Ax,
                   double *b) {
   klu_symbolic *Symbolic;
@@ -121,10 +114,14 @@ void solve_f64(void *out, void **in) {
     result[i] = b[i];
   }
 
-  // convert COO Ax, Ai, Ai to CSC Bx, Bi, Bp
+  // CSC sparse matrix initialization
   double *Bx = new double[Anz]();
   int *Bi = new int[Anz]();
   int *Bp = new int[n_col + 1]();
+
+  // initialize KLU and solve for first element in batch:
+
+  // convert COO Ax, Ai, Ai to CSC Bx, Bi, Bp
   _coo_to_csc(n_col, Anz, Ai, Aj, &Ax[0], Bi, Bp, Bx);
 
   // solve using KLU
@@ -136,24 +133,21 @@ void solve_f64(void *out, void **in) {
   Numeric = klu_factor(Bp, Bi, Bx, Symbolic, &Common);
   klu_solve(Symbolic, Numeric, n_col, n_rhs, &result[0], &Common);
 
+  // solve for other elements in batch:
+  // NOTE: same sparsity pattern for each element in batch assumed
   for (int i = 1; i < n_lhs; i++) {
     int m = i * Anz;
     int n = i * n_rhs * n_col;
 
     // convert COO Ax, Ai, Ai to CSC Bx, Bi, Bp
-    double *Bx = new double[Anz]();
-    int *Bi = new int[Anz]();
-    int *Bp = new int[n_col + 1]();
     _coo_to_csc(n_col, Anz, Ai, Aj, &Ax[m], Bi, Bp, Bx);
 
     // solve using KLU
     Numeric = klu_factor(Bp, Bi, Bx, Symbolic, &Common);
     klu_solve(Symbolic, Numeric, n_col, n_rhs, &result[n], &Common);
-
-    delete[] Bx;
-    delete[] Bi;
-    delete[] Bp;
   }
+
+  // clean up
   klu_free_symbolic(&Symbolic, &Common);
   klu_free_numeric(&Numeric, &Common);
 }
