@@ -1,6 +1,6 @@
 """ klujax: a KLU solver for JAX """
 
-__all__ = ["solve", "mul_coo_vec"]
+__all__ = ["solve"]
 
 ## IMPORTS
 
@@ -33,8 +33,6 @@ COMPLEX_DTYPES = (
 
 solve_f64 = core.Primitive("solve_f64")
 solve_c128 = core.Primitive("solve_c128")
-mul_coo_vec_f64 = core.Primitive("mul_coo_vec_f64")
-mul_coo_vec_c128 = core.Primitive("mul_coo_vec_c128")
 
 
 ## EXTRA DECORATORS
@@ -91,16 +89,6 @@ def solve_c128_impl(Ai, Aj, Ax, b):
     raise NotImplementedError
 
 
-@mul_coo_vec_f64.def_impl
-def mul_coo_vec_f64_impl(Ai, Aj, Ax, b):
-    raise NotImplementedError
-
-
-@mul_coo_vec_c128.def_impl
-def mul_coo_vec_c128_impl(Ai, Aj, Ax, b):
-    raise NotImplementedError
-
-
 ## ABSTRACT EVALUATIONS
 
 
@@ -114,22 +102,11 @@ def solve_c128_abstract_eval(Ai, Aj, Ax, b):
     return abstract_arrays.ShapedArray(b.shape, b.dtype)
 
 
-@mul_coo_vec_f64.def_abstract_eval
-def mul_coo_vec_f64_abstract_eval(Ai, Aj, Ax, b):
-    return abstract_arrays.ShapedArray(b.shape, b.dtype)
-
-
-@mul_coo_vec_c128.def_abstract_eval
-def mul_coo_vec_c128_abstract_eval(Ai, Aj, Ax, b):
-    return abstract_arrays.ShapedArray(b.shape, b.dtype)
-
-
 # ENABLE JIT
 
 
-def _xla_coo_vec_operation_f64(c, Ai, Aj, Ax, b, name):
-    if isinstance(name, str):
-        name = name.encode()
+@xla_register_cpu(solve_f64, klujax_cpp.solve_f64)
+def solve_f64_xla(c, Ai, Aj, Ax, b):
     Ax_shape = c.get_shape(Ax)
     Ai_shape = c.get_shape(Ai)
     Aj_shape = c.get_shape(Aj)
@@ -149,7 +126,7 @@ def _xla_coo_vec_operation_f64(c, Ai, Aj, Ax, b, name):
     n_rhs_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
     result = xla_client.ops.CustomCallWithLayout(
         c,
-        name,
+        b"solve_f64",
         operands=(n_col, n_rhs, Anz, Ai, Aj, Ax, b),
         operand_shapes_with_layout=(
             n_col_shape,
@@ -168,10 +145,8 @@ def _xla_coo_vec_operation_f64(c, Ai, Aj, Ax, b, name):
     return result
 
 
-def _xla_coo_vec_operation_c128(c, Ai, Aj, Ax, b, name):
-    if isinstance(name, str):
-        name = name.encode()
-
+@xla_register_cpu(solve_c128, klujax_cpp.solve_c128)
+def solve_c128_xla(c, Ai, Aj, Ax, b):
     # Ax = jnp.stack([jnp.real(Ax), jnp.imag(Ax)], 1).ravel()
     (_Anz,) = c.get_shape(Ax).dimensions()
     rAx = xla_client.ops.Real(Ax)
@@ -209,7 +184,7 @@ def _xla_coo_vec_operation_c128(c, Ai, Aj, Ax, b, name):
     n_rhs_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
     result = xla_client.ops.CustomCallWithLayout(
         c,
-        name,
+        b"solve_c128",
         operands=(n_col, n_rhs, Anz, Ai, Aj, Ax, b),
         operand_shapes_with_layout=(
             n_col_shape,
@@ -240,26 +215,6 @@ def _xla_coo_vec_operation_c128(c, Ai, Aj, Ax, b, name):
     result = xla_client.ops.Complex(result_r, result_i)
     result = xla_client.ops.Reshape(result, [_n_col, *_n_rhs_list])
     return result
-
-
-@xla_register_cpu(solve_f64, klujax_cpp.solve_f64)
-def solve_f64_xla_translation(c, Ai, Aj, Ax, b):
-    return _xla_coo_vec_operation_f64(c, Ai, Aj, Ax, b, "solve_f64")
-
-
-@xla_register_cpu(solve_c128, klujax_cpp.solve_c128)
-def solve_c128_xla_translation(c, Ai, Aj, Ax, b):
-    return _xla_coo_vec_operation_c128(c, Ai, Aj, Ax, b, "solve_c128")
-
-
-@xla_register_cpu(mul_coo_vec_f64, klujax_cpp.mul_coo_vec_f64)
-def mul_coo_vec_f64_xla_translation(c, Ai, Aj, Ax, b):
-    return _xla_coo_vec_operation_f64(c, Ai, Aj, Ax, b, "mul_coo_vec_f64")
-
-
-@xla_register_cpu(mul_coo_vec_c128, klujax_cpp.mul_coo_vec_c128)
-def mul_coo_vec_c128_xla_translation(c, Ai, Aj, Ax, b):
-    return _xla_coo_vec_operation_c128(c, Ai, Aj, Ax, b, "mul_coo_vec_c128")
 
 
 # ENABLE FORWARD GRAD
@@ -297,7 +252,9 @@ def solve_f64_transpose(ct, Ai, Aj, Ax, b):
 # ENABLE VMAP
 
 
-def _coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
+@vmap_register(solve_c128)
+@vmap_register(solve_f64)
+def _coo_vec_operation_vmap(vector_arg_values, batch_axes):
     aAi, aAj, aAx, ab = batch_axes
     Ai, Aj, Ax, b = vector_arg_values
 
@@ -314,7 +271,7 @@ def _coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
             Ax = jnp.moveaxis(Ax, aAx, 0)
         if ab != 0:
             b = jnp.moveaxis(b, ab, 0)
-        x = jnp.stack([operation(Ai, Aj, Ax[i], b[i]) for i in range(n_lhs)], 0)
+        x = jnp.stack([solve(Ai, Aj, Ax[i], b[i]) for i in range(n_lhs)], 0)
         return x, 0
 
     if aAx is None:
@@ -322,7 +279,7 @@ def _coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
         n_lhs = b.shape[ab]
         if ab != 0:
             b = jnp.moveaxis(b, ab, 0)
-        x = jnp.stack([operation(Ai, Aj, Ax, b[i]) for i in range(n_lhs)], 0)
+        x = jnp.stack([solve(Ai, Aj, Ax, b[i]) for i in range(n_lhs)], 0)
         return x, 0
 
     if ab is None:
@@ -330,20 +287,8 @@ def _coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
         n_lhs = Ax.shape[aAx]
         if aAx != 0:
             Ax = jnp.moveaxis(Ax, aAx, 0)
-        x = jnp.stack([operation(Ai, Aj, Ax[i], b) for i in range(n_lhs)], 0)
+        x = jnp.stack([solve(Ai, Aj, Ax[i], b) for i in range(n_lhs)], 0)
         return x, 0
-
-
-@vmap_register(solve_c128)
-@vmap_register(solve_f64)
-def solve_vmap(vector_arg_values, batch_axes):
-    return _coo_vec_operation_vmap(solve, vector_arg_values, batch_axes)
-
-
-@vmap_register(mul_coo_vec_c128)
-@vmap_register(mul_coo_vec_f64)
-def mul_coo_vec_vmap(vector_arg_values, batch_axes):
-    return _coo_vec_operation_vmap(mul_coo_vec, vector_arg_values, batch_axes)
 
 
 ## THE FUNCTIONS
@@ -360,25 +305,6 @@ def solve(Ai, Aj, Ax, b):
         )
     else:
         result = solve_f64.bind(
-            Ai.astype(jnp.int32),
-            Aj.astype(jnp.int32),
-            Ax.astype(jnp.float64),
-            b.astype(jnp.float64),
-        )
-    return result
-
-
-@jax.jit  # jitting by default allows for empty implementation definitions
-def mul_coo_vec(Ai, Aj, Ax, b):
-    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
-        result = mul_coo_vec_c128.bind(
-            Ai.astype(jnp.int32),
-            Aj.astype(jnp.int32),
-            Ax.astype(jnp.complex128),
-            b.astype(jnp.complex128),
-        )
-    else:
-        result = mul_coo_vec_f64.bind(
             Ai.astype(jnp.int32),
             Aj.astype(jnp.int32),
             Ax.astype(jnp.float64),

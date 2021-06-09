@@ -156,59 +156,6 @@ void solve_c128(void *out, void **in) {
   _klu_z_solve(n_col, n_rhs, Bi, Bp, Bx, /*b=*/result);
 }
 
-void mul_coo_vec_f64(void *out, void **in) {
-  // get args
-  int n_col = *reinterpret_cast<int *>(in[0]);
-  int n_rhs = *reinterpret_cast<int *>(in[1]);
-  int Anz = *reinterpret_cast<int *>(in[2]);
-  int *Ai = reinterpret_cast<int *>(in[3]);
-  int *Aj = reinterpret_cast<int *>(in[4]);
-  double *Ax = reinterpret_cast<double *>(in[5]);
-  double *b = reinterpret_cast<double *>(in[6]);
-  double *result = reinterpret_cast<double *>(out);
-
-  // initialize empty result
-  for (int k = 0; k < n_col * n_rhs; k++) {
-    result[k] = 0.0;
-  }
-
-  // fill result
-  for (int l = 0; l < n_rhs; l++) {
-    for (int k = 0; k < Anz; k++) {
-      result[Ai[k] + l * n_col] += Ax[k] * b[Aj[k] + l * n_col];
-    }
-  }
-}
-
-void mul_coo_vec_c128(void *out, void **in) {
-  // get args
-  int n_col = *reinterpret_cast<int *>(in[0]);
-  int n_rhs = *reinterpret_cast<int *>(in[1]);
-  int Anz = *reinterpret_cast<int *>(in[2]);
-  int *Ai = reinterpret_cast<int *>(in[3]);
-  int *Aj = reinterpret_cast<int *>(in[4]);
-  double *Ax = reinterpret_cast<double *>(in[5]);
-  double *b = reinterpret_cast<double *>(in[6]);
-  double *result = reinterpret_cast<double *>(out);
-
-  // initialize empty result
-  for (int k = 0; k < 2 * n_col * n_rhs; k++) {
-    result[k] = 0.0;
-  }
-
-  // fill result
-  for (int l = 0; l < n_rhs; l++) {
-    for (int k = 0; k < Anz; k++) {
-      result[2 * (Ai[k] + l * n_col)] +=                  // real part
-          Ax[2 * k] * b[2 * (Aj[k] + l * n_col)] -        // real * real
-          Ax[2 * k + 1] * b[2 * (Aj[k] + l * n_col) + 1]; // imag * imag
-      result[2 * (Ai[k] + l * n_col) + 1] +=              // imag part
-          Ax[2 * k] * b[2 * (Aj[k] + l * n_col) + 1] +    // real * imag
-          Ax[2 * k + 1] * b[2 * (Aj[k] + l * n_col)];     // imag * real
-    }
-  }
-}
-
 PYBIND11_MODULE(klujax_cpp, m) {
   m.def(
       "solve_f64",
@@ -224,18 +171,4 @@ PYBIND11_MODULE(klujax_cpp, m) {
         return py::capsule((void *)&solve_c128, name);
       },
       "solve a complex-valued linear system of equations");
-  m.def(
-      "mul_coo_vec_f64",
-      []() {
-        const char *name = "xla._CUSTOM_CALL_TARGET";
-        return py::capsule((void *)&mul_coo_vec_f64, name);
-      },
-      "matmul of real-valued sparse COO matrix with dense vector");
-  m.def(
-      "mul_coo_vec_c128",
-      []() {
-        const char *name = "xla._CUSTOM_CALL_TARGET";
-        return py::capsule((void *)&mul_coo_vec_c128, name);
-      },
-      "matmul of real-valued sparse COO matrix with dense vector");
 }
