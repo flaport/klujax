@@ -112,6 +112,7 @@ def solve_f64_xla(c, Ai, Aj, Ax, b):
     Aj_shape = c.get_shape(Aj)
     b_shape = c.get_shape(b)
     *_n_lhs_list, _Anz = Ax_shape.dimensions()
+    assert len(_n_lhs_list) < 2, "solve alows for maximum one batch dimension."
     _n_lhs = np.prod(np.array(_n_lhs_list, np.int32))
     Ax = xla_client.ops.Reshape(Ax, (_n_lhs * _Anz,))
     Ax_shape = c.get_shape(Ax)
@@ -161,47 +162,64 @@ def solve_f64_xla(c, Ai, Aj, Ax, b):
 
 @xla_register_cpu(solve_c128, klujax_cpp.solve_c128)
 def solve_c128_xla(c, Ai, Aj, Ax, b):
-    # Ax = jnp.stack([jnp.real(Ax), jnp.imag(Ax)], 1).ravel()
-    (_Anz,) = c.get_shape(Ax).dimensions()
-    rAx = xla_client.ops.Real(Ax)
-    iAx = xla_client.ops.Imag(Ax)
-    rAx = xla_client.ops.BroadcastInDim(rAx, [_Anz, 1], [0])  # rAx[:, None]
-    iAx = xla_client.ops.BroadcastInDim(iAx, [_Anz, 1], [0])  # iAx[:, None]
-    Ax = xla_client.ops.ConcatInDim(c, [rAx, iAx], 1)
-    Ax = xla_client.ops.Reshape(Ax, [2 * _Anz])
-
-    # b = jnp.stack([jnp.real(b), jnp.imag(b)], 1).reshape(-1, *b.shape[1:])
-    _n_col, *_n_rhs_list = c.get_shape(b).dimensions()
-    rb = xla_client.ops.Real(b)
-    ib = xla_client.ops.Imag(b)
-    new_shape = [_n_col, 1, *_n_rhs_list]
-    broadcast_dims = [i for i in range(len(new_shape)) if i != 1]
-    rb = xla_client.ops.BroadcastInDim(rb, new_shape, broadcast_dims)  # rb[:, None]
-    ib = xla_client.ops.BroadcastInDim(ib, new_shape, broadcast_dims)  # ib[:, None]
-    b = xla_client.ops.ConcatInDim(c, [rb, ib], 1)
-    b = xla_client.ops.Reshape(b, [2 * _n_col, *_n_rhs_list])
-
     Ax_shape = c.get_shape(Ax)
     Ai_shape = c.get_shape(Ai)
     Aj_shape = c.get_shape(Aj)
     b_shape = c.get_shape(b)
-    _n_rhs = np.prod([1] + _n_rhs_list)
-    b = xla_client.ops.Reshape(b, (2 * _n_col, _n_rhs))
-    b = xla_client.ops.Transpose(b, (1, 0))
-    b = xla_client.ops.Reshape(b, (2 * _n_rhs * _n_col,))
+
+    *_n_lhs_list, _Anz = Ax_shape.dimensions()
+    assert len(_n_lhs_list) < 2, "solve alows for maximum one batch dimension."
+    _n_lhs = np.prod(np.array(_n_lhs_list, dtype=np.int32))
+    Ax = xla_client.ops.Reshape(Ax, (_n_lhs, _Anz))
+    rAx = xla_client.ops.Real(Ax)
+    iAx = xla_client.ops.Imag(Ax)
+    rAx = xla_client.ops.BroadcastInDim(rAx, [_n_lhs, _Anz, 1], [0, 1])  # Ax[..., None]
+    iAx = xla_client.ops.BroadcastInDim(iAx, [_n_lhs, _Anz, 1], [0, 1])  # Ax[..., None]
+    Ax = xla_client.ops.ConcatInDim(c, [rAx, iAx], 2)
+    Ax = xla_client.ops.Reshape(Ax, (2 * _n_lhs * _Anz,))
+
+    if _n_lhs_list:
+        _n_lhs_b, _n_col, *_n_rhs_list = b_shape.dimensions()
+    else:
+        _n_col, *_n_rhs_list = b_shape.dimensions()
+        _n_lhs_b = 1
+    assert _n_lhs_b == _n_lhs, "Batch dimension of Ax and b don't match."
+    _n_rhs = np.prod(np.array(_n_rhs_list, dtype=np.int32))
+    b = xla_client.ops.Reshape(b, (_n_lhs, _n_col, _n_rhs))
+    rb = xla_client.ops.Real(b)
+    ib = xla_client.ops.Imag(b)
+    new_shape, broadcast_dims = [_n_lhs, _n_col, 1, _n_rhs], [0, 1, 3]
+    rb = xla_client.ops.BroadcastInDim(rb, new_shape, broadcast_dims)  # rb[..., None]
+    ib = xla_client.ops.BroadcastInDim(ib, new_shape, broadcast_dims)  # ib[..., None]
+    b = xla_client.ops.ConcatInDim(c, [rb, ib], 2)
+    b = xla_client.ops.Reshape(
+        b,
+        (
+            _n_lhs,
+            2 * _n_col,
+            _n_rhs,
+        ),
+    )
+    b = xla_client.ops.Transpose(b, (0, 2, 1))
+    b = xla_client.ops.Reshape(b, (2 * _n_lhs * _n_rhs * _n_col,))
+
+    Ax_shape = c.get_shape(Ax)
     b_shape = c.get_shape(b)
     Anz = xla_client.ops.ConstantLiteral(c, np.int32(_Anz))
     n_col = xla_client.ops.ConstantLiteral(c, np.int32(_n_col))
+    n_lhs = xla_client.ops.ConstantLiteral(c, np.int32(_n_lhs))
     n_rhs = xla_client.ops.ConstantLiteral(c, np.int32(_n_rhs))
     Anz_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
     n_col_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
+    n_lhs_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
     n_rhs_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
     result = xla_client.ops.CustomCallWithLayout(
         c,
         b"solve_c128",
-        operands=(n_col, n_rhs, Anz, Ai, Aj, Ax, b),
+        operands=(n_col, n_lhs, n_rhs, Anz, Ai, Aj, Ax, b),
         operand_shapes_with_layout=(
             n_col_shape,
+            n_lhs_shape,
             n_rhs_shape,
             Anz_shape,
             Ai_shape,
@@ -211,23 +229,25 @@ def solve_c128_xla(c, Ai, Aj, Ax, b):
         ),
         shape_with_layout=b_shape,
     )
-    result = xla_client.ops.Reshape(result, (_n_rhs, _n_col, 2))
-    result = xla_client.ops.Transpose(result, (2, 1, 0))
-    result = xla_client.ops.Reshape(result, [2, _n_col, *_n_rhs_list])
+    result = xla_client.ops.Reshape(result, (_n_lhs, _n_rhs, _n_col, 2))
     result_r = xla_client.ops.Slice(
         result,
-        [0, 0, *(0 for _ in _n_rhs_list)],
-        [1, _n_col, *_n_rhs_list],
-        [1, 1, *(1 for _ in _n_rhs_list)],
+        [0, 0, 0, 0],
+        [_n_lhs, _n_rhs, _n_col, 1],
+        [1, 1, 1, 1],
     )
     result_i = xla_client.ops.Slice(
         result,
-        [1, 0, *(0 for _ in _n_rhs_list)],
-        [2, _n_col, *_n_rhs_list],
-        [1, 1, *(1 for _ in _n_rhs_list)],
+        [0, 0, 0, 1],
+        [_n_lhs, _n_rhs, _n_col, 2],
+        [1, 1, 1, 1],
     )
     result = xla_client.ops.Complex(result_r, result_i)
-    result = xla_client.ops.Reshape(result, [_n_col, *_n_rhs_list])
+    result = xla_client.ops.Transpose(result, (0, 2, 1, 3))
+    if _n_lhs_list:
+        result = xla_client.ops.Reshape(result, (_n_lhs, _n_col, *_n_rhs_list))
+    else:
+        result = xla_client.ops.Reshape(result, (_n_col, *_n_rhs_list))
     return result
 
 
@@ -266,7 +286,7 @@ def solve_f64_transpose(ct, Ai, Aj, Ax, b):
 # ENABLE VMAP
 
 
-# @vmap_register(solve_c128)
+@vmap_register(solve_c128)
 @vmap_register(solve_f64)
 def solve_f64_vmap(vector_arg_values, batch_axes):
     aAi, aAj, aAx, ab = batch_axes
@@ -278,34 +298,35 @@ def solve_f64_vmap(vector_arg_values, batch_axes):
     if aAx is not None and ab is not None:
         assert isinstance(aAx, int) and isinstance(ab, int)
         n_lhs = Ax.shape[aAx]
-        assert (
-            b.shape[ab] == n_lhs
-        ), f"axis {aAx} of Ax and axis {ab} of b differ in size ({n_lhs} != {b.shape[ab]})"
         if ab != 0:
             Ax = jnp.moveaxis(Ax, aAx, 0)
         if ab != 0:
             b = jnp.moveaxis(b, ab, 0)
-    elif aAx is None:
-        assert isinstance(ab, int)
-        n_lhs = b.shape[ab]
-        if ab != 0:
-            b = jnp.moveaxis(b, ab, 0)
-        Ax = jnp.broadcast_to(Ax[None], (b.shape[0], *Ax.shape))
-    elif ab is None:
+        result = solve(Ai, Aj, Ax, b)
+        return result, 0
+
+    if ab is None:
         assert isinstance(aAx, int)
         n_lhs = Ax.shape[aAx]
         if aAx != 0:
             Ax = jnp.moveaxis(Ax, aAx, 0)
         b = jnp.broadcast_to(b[None], (Ax.shape[0], *b.shape))
-    else:
-        raise ValueError("invalid arguments for vmap")
-    x = solve(
-        Ai.astype(jnp.int32),
-        Aj.astype(jnp.int32),
-        Ax.astype(jnp.float64),
-        b.astype(jnp.float64),
-    )
-    return x, 0
+        result = solve(Ai, Aj, Ax, b)
+        return result, 0
+
+    if aAx is None:
+        assert isinstance(ab, int)
+        if ab != 0:
+            b = jnp.moveaxis(b, ab, 0)
+        n_lhs, n_col, *n_rhs_list = b.shape
+        n_rhs = np.prod(np.array(n_rhs_list, dtype=np.int32))
+        b = b.reshape(n_lhs, n_col, n_rhs).transpose((1, 0, 2)).reshape(n_col, -1)
+        result = solve(Ai, Aj, Ax, b)
+        result = result.reshape(n_col, n_lhs, *n_rhs_list)
+        return result, 1
+
+    raise ValueError("invalid arguments for vmap")
+
 
 
 ## THE FUNCTIONS
