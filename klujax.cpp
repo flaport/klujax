@@ -50,6 +50,11 @@ void _coo_to_csc(int n_col, int n_nz, int *Ai, int *Aj, double *Ax, int *Bi,
 void _coo_z_to_csc_z(int n_col, int n_nz, int *Ai, int *Aj, double *Ax, int *Bi,
                      int *Bp, double *Bx) {
 
+  // fill Bp with zeros
+  for (int n = 0; n < n_col + 1; n++) {
+    Bp[n] = 0.0;
+  }
+
   // compute number of non-zero entries per row of A
   for (int n = 0; n < n_nz; n++) {
     Bp[Aj[n]] += 1;
@@ -153,7 +158,7 @@ void solve_c128(void *out, void **in) {
   double *result = reinterpret_cast<double *>(out);
 
   // copy b into result
-  for (int i = 0; i < 2 * n_col * n_rhs; i++) {
+  for (int i = 0; i < 2 * n_lhs * n_col * n_rhs; i++) {
     result[i] = b[i];
   }
 
@@ -179,14 +184,14 @@ void solve_c128(void *out, void **in) {
   // solve for other elements in batch:
   // NOTE: same sparsity pattern for each element in batch assumed
   for (int i = 1; i < n_lhs; i++) {
-    int m = i * Anz;
-    int n = i * n_rhs * n_col;
+    int m = 2 * i * Anz;
+    int n = 2 * i * n_rhs * n_col;
 
     // convert COO Ax, Ai, Ai to CSC Bx, Bi, Bp
-    _coo_to_csc(n_col, Anz, Ai, Aj, &Ax[m], Bi, Bp, Bx);
+    _coo_z_to_csc_z(n_col, Anz, Ai, Aj, &Ax[m], Bi, Bp, Bx);
 
     // solve using KLU
-    Numeric = klu_factor(Bp, Bi, Bx, Symbolic, &Common);
+    Numeric = klu_z_factor(Bp, Bi, Bx, Symbolic, &Common);
     klu_z_solve(Symbolic, Numeric, n_col, n_rhs, &result[n], &Common);
   }
 
