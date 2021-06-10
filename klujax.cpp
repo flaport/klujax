@@ -6,13 +6,8 @@
 
 namespace py = pybind11;
 
-void _coo_to_csc(int n_col, int n_nz, int *Ai, int *Aj, double *Ax, int *Bi,
-                 int *Bp, double *Bx) {
-
-  // fill Bp with zeros
-  for (int n = 0; n < n_col + 1; n++) {
-    Bp[n] = 0.0;
-  }
+void coo_to_csc_analyze(int n_col, int n_nz, int *Ai, int *Aj, int *Bi, int *Bp,
+                        int *Bk) {
 
   // compute number of non-zero entries per row of A
   for (int n = 0; n < n_nz; n++) {
@@ -28,14 +23,14 @@ void _coo_to_csc(int n_col, int n_nz, int *Ai, int *Aj, double *Ax, int *Bi,
     cumsum += temp;
   }
 
-  // write Ai, Ax into Bi, Bx
+  // write Ai, Ax into Bi, Bk
   int col = 0;
   int dest = 0;
   for (int n = 0; n < n_nz; n++) {
     col = Aj[n];
     dest = Bp[col];
     Bi[dest] = Ai[n];
-    Bx[dest] = Ax[n];
+    Bk[dest] = n;
     Bp[col] += 1;
   }
 
@@ -46,49 +41,6 @@ void _coo_to_csc(int n_col, int n_nz, int *Ai, int *Aj, double *Ax, int *Bi,
     last = temp;
   }
 }
-
-void _coo_z_to_csc_z(int n_col, int n_nz, int *Ai, int *Aj, double *Ax, int *Bi,
-                     int *Bp, double *Bx) {
-
-  // fill Bp with zeros
-  for (int n = 0; n < n_col + 1; n++) {
-    Bp[n] = 0.0;
-  }
-
-  // compute number of non-zero entries per row of A
-  for (int n = 0; n < n_nz; n++) {
-    Bp[Aj[n]] += 1;
-  }
-
-  // cumsum the n_nz per row to get Bp
-  int cumsum = 0;
-  int temp = 0;
-  for (int j = 0; j < n_col; j++) {
-    temp = Bp[j];
-    Bp[j] = cumsum;
-    cumsum += temp;
-  }
-
-  // write Ai, Ax into Bi, Bx
-  int col = 0;
-  int dest = 0;
-  for (int n = 0; n < n_nz; n++) {
-    col = Aj[n];
-    dest = Bp[col];
-    Bi[dest] = Ai[n];
-    Bx[2 * dest] = Ax[2 * n];
-    Bx[2 * dest + 1] = Ax[2 * n + 1];
-    Bp[col] += 1;
-  }
-
-  int last = 0;
-  for (int i = 0; i <= n_col; i++) {
-    temp = Bp[i];
-    Bp[i] = last;
-    last = temp;
-  }
-}
-
 
 void solve_f64(void *out, void **in) {
   // get args
@@ -107,13 +59,11 @@ void solve_f64(void *out, void **in) {
     result[i] = b[i];
   }
 
-  // CSC sparse matrix initialization
-  double *Bx = new double[Anz]();
+  // get COO -> CSC transformation information
+  int *Bk = new int[Anz](); // Ax -> Bx transformation indices
   int *Bi = new int[Anz]();
   int *Bp = new int[n_col + 1]();
-
-  // convert COO Ax, Ai, Ai to CSC Bx, Bi, Bp
-  _coo_to_csc(n_col, Anz, Ai, Aj, &Ax[0], Bi, Bp, Bx);
+  coo_to_csc_analyze(n_col, Anz, Ai, Aj, Bi, Bp, Bk);
 
   // initialize KLU for given sparsity pattern
   klu_symbolic *Symbolic;
@@ -122,18 +72,17 @@ void solve_f64(void *out, void **in) {
   klu_defaults(&Common);
   Symbolic = klu_analyze(n_col, Bp, Bi, &Common);
 
-  // solve first element of batch using KLU
-  Numeric = klu_factor(Bp, Bi, Bx, Symbolic, &Common);
-  klu_solve(Symbolic, Numeric, n_col, n_rhs, &result[0], &Common);
-
   // solve for other elements in batch:
   // NOTE: same sparsity pattern for each element in batch assumed
-  for (int i = 1; i < n_lhs; i++) {
+  double *Bx = new double[Anz]();
+  for (int i = 0; i < n_lhs; i++) {
     int m = i * Anz;
     int n = i * n_rhs * n_col;
 
-    // convert COO Ax, Ai, Ai to CSC Bx, Bi, Bp
-    _coo_to_csc(n_col, Anz, Ai, Aj, &Ax[m], Bi, Bp, Bx);
+    // convert COO Ax to CSC Bx
+    for (int k = 0; k < Anz; k++) {
+      Bx[k] = Ax[m + Bk[k]];
+    }
 
     // solve using KLU
     Numeric = klu_factor(Bp, Bi, Bx, Symbolic, &Common);
@@ -162,13 +111,11 @@ void solve_c128(void *out, void **in) {
     result[i] = b[i];
   }
 
-  // CSC sparse matrix initialization
-  double *Bx = new double[2 * Anz]();
-  int *Bi = new int[Anz]();
-  int *Bp = new int[n_col + 1]();
-
-  // convert COO Ax, Ai, Ai to CSC Bx, Bi, Bp
-  _coo_z_to_csc_z(n_col, Anz, Ai, Aj, &Ax[0], Bi, Bp, Bx);
+  // get COO -> CSC transformation information
+  int *Bk = new int[Anz]();       // Ax -> Bx transformation indices
+  int *Bi = new int[Anz]();       // CSC row indices
+  int *Bp = new int[n_col + 1](); // CSC column pointers
+  coo_to_csc_analyze(n_col, Anz, Ai, Aj, Bi, Bp, Bk);
 
   // initialize KLU for given sparsity pattern
   klu_symbolic *Symbolic;
@@ -177,18 +124,18 @@ void solve_c128(void *out, void **in) {
   klu_defaults(&Common);
   Symbolic = klu_analyze(n_col, Bp, Bi, &Common);
 
-  // solve first element of batch using KLU
-  Numeric = klu_z_factor(Bp, Bi, Bx, Symbolic, &Common);
-  klu_z_solve(Symbolic, Numeric, n_col, n_rhs, &result[0], &Common);
-
   // solve for other elements in batch:
   // NOTE: same sparsity pattern for each element in batch assumed
-  for (int i = 1; i < n_lhs; i++) {
+  double *Bx = new double[2 * Anz]();
+  for (int i = 0; i < n_lhs; i++) {
     int m = 2 * i * Anz;
     int n = 2 * i * n_rhs * n_col;
 
-    // convert COO Ax, Ai, Ai to CSC Bx, Bi, Bp
-    _coo_z_to_csc_z(n_col, Anz, Ai, Aj, &Ax[m], Bi, Bp, Bx);
+    // convert COO Ax to CSC Bx
+    for (int k = 0; k < Anz; k++) {
+      Bx[2 * k] = Ax[m + 2 * Bk[k]];
+      Bx[2 * k + 1] = Ax[m + 2 * Bk[k] + 1];
+    }
 
     // solve using KLU
     Numeric = klu_z_factor(Bp, Bi, Bx, Symbolic, &Common);
