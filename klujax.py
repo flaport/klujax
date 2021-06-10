@@ -81,12 +81,8 @@ def vmap_register(primitive):
 
 
 @solve_f64.def_impl
-def solve_f64_impl(Ai, Aj, Ax, b):
-    raise NotImplementedError
-
-
 @solve_c128.def_impl
-def solve_c128_impl(Ai, Aj, Ax, b):
+def solve_impl(Ai, Aj, Ax, b):
     raise NotImplementedError
 
 
@@ -94,12 +90,8 @@ def solve_c128_impl(Ai, Aj, Ax, b):
 
 
 @solve_f64.def_abstract_eval
-def solve_f64_abstract_eval(Ai, Aj, Ax, b):
-    return abstract_arrays.ShapedArray(b.shape, b.dtype)
-
-
 @solve_c128.def_abstract_eval
-def solve_c128_abstract_eval(Ai, Aj, Ax, b):
+def solve_abstract_eval(Ai, Aj, Ax, b):
     return abstract_arrays.ShapedArray(b.shape, b.dtype)
 
 
