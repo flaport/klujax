@@ -182,8 +182,87 @@ def test_solve_c128_vmap():
     np.testing.assert_array_almost_equal(x_sp, x)
 
 
+def test_coo_mul_vec_f64():
+    print("\ntest_coo_mul_vec_f64")
+    n_nz = 8
+    n_col = 5
+    n_rhs = 1
+    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
+    Ax = jax.random.normal(Axkey, (n_nz,))
+    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
+    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
+    b = jax.random.normal(bkey, (n_col, n_rhs))
+
+    x_sp = klujax.coo_mul_vec(Ai, Aj, Ax, b)
+
+    A = jnp.zeros((n_col, n_col), dtype=jnp.float64).at[Ai, Aj].add(Ax)
+    x = A@b
+
+    print(x)
+    print(x_sp)
+    np.testing.assert_array_almost_equal(x_sp, x)
+
+
+def test_coo_mul_vec_f64_vmap():
+    print("\ntest_coo_mul_vec_f64_vmap")
+    n_lhs = 23
+    n_nz = 8
+    n_col = 5
+    n_rhs = 1
+    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
+    Ax = jax.random.normal(Axkey, (n_lhs, n_nz,))
+    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
+    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
+    b = jax.random.normal(bkey, (n_lhs, n_col, n_rhs))
+
+    vmul = jax.vmap(klujax.coo_mul_vec, in_axes=(None, None, 0, 0), out_axes=0)
+    x_sp = vmul(Ai, Aj, Ax, b)
+
+    A = jnp.zeros((n_lhs, n_col, n_col), dtype=jnp.float64).at[:, Ai, Aj].add(Ax)
+    x = jnp.einsum("bij,bjk->bik", A, b)
+
+    print(x[:2])
+    print(x_sp[:2])
+    np.testing.assert_array_almost_equal(x_sp, x)
+
+    # A vmapped
+    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
+    Ax = jax.random.normal(Axkey, (n_lhs, n_nz))
+    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
+    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
+    b = jax.random.normal(bkey, (n_col, n_rhs))
+
+    vmul = jax.vmap(klujax.coo_mul_vec, in_axes=(None, None, 0, None), out_axes=0)
+    x_sp = vmul(Ai, Aj, Ax, b)
+
+    A = jnp.zeros((n_lhs, n_col, n_col), dtype=jnp.float64).at[:, Ai, Aj].add(Ax)
+    x = jnp.einsum("bij,bjk->bik", A, b[None])
+
+    print(x[:2])
+    print(x_sp[:2])
+    np.testing.assert_array_almost_equal(x_sp, x)
+
+    # b vmapped
+    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
+    Ax = jax.random.normal(Axkey, (n_nz,))
+    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
+    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
+    b = jax.random.normal(bkey, (n_lhs, n_col, n_rhs))
+
+    vmul = jax.vmap(klujax.coo_mul_vec, in_axes=(None, None, None, 0), out_axes=0)
+    x_sp = vmul(Ai, Aj, Ax, b)
+
+    A = jnp.zeros((n_col, n_col), dtype=jnp.float64).at[Ai, Aj].add(Ax)
+    x = jnp.einsum("ij,bjk->bik", A, b)
+
+    print(x[:2])
+    print(x_sp[:2])
+    np.testing.assert_array_almost_equal(x_sp, x)
+
 if __name__ == "__main__":
     test_solve_f64()
     test_solve_c128()
     test_solve_f64_vmap()
     test_solve_c128_vmap()
+    test_coo_mul_vec_f64()
+    test_coo_mul_vec_f64_vmap()

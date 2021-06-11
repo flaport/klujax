@@ -34,6 +34,7 @@ COMPLEX_DTYPES = (
 
 solve_f64 = core.Primitive("solve_f64")
 solve_c128 = core.Primitive("solve_c128")
+coo_mul_vec_f64 = core.Primitive("coo_mul_vec_f64")
 
 
 ## EXTRA DECORATORS
@@ -69,9 +70,9 @@ def transpose_register(primitive):
     return decorator
 
 
-def vmap_register(primitive):
+def vmap_register(primitive, operation):
     def decorator(fun):
-        batching.primitive_batchers[primitive] = fun
+        batching.primitive_batchers[primitive] = partial(fun, operation)
         return fun
 
     return decorator
@@ -82,7 +83,8 @@ def vmap_register(primitive):
 
 @solve_f64.def_impl
 @solve_c128.def_impl
-def solve_impl(Ai, Aj, Ax, b):
+@coo_mul_vec_f64.def_impl
+def coo_vec_operation_impl(Ai, Aj, Ax, b):
     raise NotImplementedError
 
 
@@ -91,7 +93,8 @@ def solve_impl(Ai, Aj, Ax, b):
 
 @solve_f64.def_abstract_eval
 @solve_c128.def_abstract_eval
-def solve_abstract_eval(Ai, Aj, Ax, b):
+@coo_mul_vec_f64.def_abstract_eval
+def coo_vec_operation_impl(Ai, Aj, Ax, b):
     return abstract_arrays.ShapedArray(b.shape, b.dtype)
 
 
@@ -100,7 +103,8 @@ def solve_abstract_eval(Ai, Aj, Ax, b):
 
 @xla_register_cpu(solve_f64, klujax_cpp.solve_f64)
 @xla_register_cpu(solve_c128, klujax_cpp.solve_c128)
-def solve_xla(primitive_name, c, Ai, Aj, Ax, b):
+@xla_register_cpu(coo_mul_vec_f64, klujax_cpp.coo_mul_vec_f64)
+def coo_vec_operation_xla(primitive_name, c, Ai, Aj, Ax, b):
     Ax_shape = c.get_shape(Ax)
     Ai_shape = c.get_shape(Ai)
     Aj_shape = c.get_shape(Aj)
@@ -186,51 +190,6 @@ def solve_f64_transpose(ct, Ai, Aj, Ax, b):
     return None, None, None, ct_b
 
 
-# ENABLE VMAP
-
-
-@vmap_register(solve_c128)
-@vmap_register(solve_f64)
-def solve_f64_vmap(vector_arg_values, batch_axes):
-    aAi, aAj, aAx, ab = batch_axes
-    Ai, Aj, Ax, b = vector_arg_values
-
-    assert aAi is None, "Ai cannot be vectorized."
-    assert aAj is None, "Aj cannot be vectorized."
-
-    if aAx is not None and ab is not None:
-        assert isinstance(aAx, int) and isinstance(ab, int)
-        n_lhs = Ax.shape[aAx]
-        if ab != 0:
-            Ax = jnp.moveaxis(Ax, aAx, 0)
-        if ab != 0:
-            b = jnp.moveaxis(b, ab, 0)
-        result = solve(Ai, Aj, Ax, b)
-        return result, 0
-
-    if ab is None:
-        assert isinstance(aAx, int)
-        n_lhs = Ax.shape[aAx]
-        if aAx != 0:
-            Ax = jnp.moveaxis(Ax, aAx, 0)
-        b = jnp.broadcast_to(b[None], (Ax.shape[0], *b.shape))
-        result = solve(Ai, Aj, Ax, b)
-        return result, 0
-
-    if aAx is None:
-        assert isinstance(ab, int)
-        if ab != 0:
-            b = jnp.moveaxis(b, ab, 0)
-        n_lhs, n_col, *n_rhs_list = b.shape
-        n_rhs = np.prod(np.array(n_rhs_list, dtype=np.int32))
-        b = b.reshape(n_lhs, n_col, n_rhs).transpose((1, 0, 2)).reshape(n_col, -1)
-        result = solve(Ai, Aj, Ax, b)
-        result = result.reshape(n_col, n_lhs, *n_rhs_list)
-        return result, 1
-
-    raise ValueError("invalid arguments for vmap")
-
-
 ## THE FUNCTIONS
 
 
@@ -251,6 +210,63 @@ def solve(Ai, Aj, Ax, b):
             b.astype(jnp.float64),
         )
     return result
+
+
+@jax.jit  # jitting by default allows for empty implementation definitions
+def coo_mul_vec(Ai, Aj, Ax, b):
+    result = coo_mul_vec_f64.bind(
+        Ai.astype(jnp.int32),
+        Aj.astype(jnp.int32),
+        Ax.astype(jnp.float64),
+        b.astype(jnp.float64),
+    )
+    return result
+
+
+# ENABLE VMAP
+
+
+@vmap_register(solve_f64, solve)
+@vmap_register(solve_c128, solve)
+@vmap_register(coo_mul_vec_f64, coo_mul_vec)
+def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
+    aAi, aAj, aAx, ab = batch_axes
+    Ai, Aj, Ax, b = vector_arg_values
+
+    assert aAi is None, "Ai cannot be vectorized."
+    assert aAj is None, "Aj cannot be vectorized."
+
+    if aAx is not None and ab is not None:
+        assert isinstance(aAx, int) and isinstance(ab, int)
+        n_lhs = Ax.shape[aAx]
+        if ab != 0:
+            Ax = jnp.moveaxis(Ax, aAx, 0)
+        if ab != 0:
+            b = jnp.moveaxis(b, ab, 0)
+        result = operation(Ai, Aj, Ax, b)
+        return result, 0
+
+    if ab is None:
+        assert isinstance(aAx, int)
+        n_lhs = Ax.shape[aAx]
+        if aAx != 0:
+            Ax = jnp.moveaxis(Ax, aAx, 0)
+        b = jnp.broadcast_to(b[None], (Ax.shape[0], *b.shape))
+        result = operation(Ai, Aj, Ax, b)
+        return result, 0
+
+    if aAx is None:
+        assert isinstance(ab, int)
+        if ab != 0:
+            b = jnp.moveaxis(b, ab, 0)
+        n_lhs, n_col, *n_rhs_list = b.shape
+        n_rhs = np.prod(np.array(n_rhs_list, dtype=np.int32))
+        b = b.reshape(n_lhs, n_col, n_rhs).transpose((1, 0, 2)).reshape(n_col, -1)
+        result = operation(Ai, Aj, Ax, b)
+        result = result.reshape(n_col, n_lhs, *n_rhs_list)
+        return result, 1
+
+    raise ValueError("invalid arguments for vmap")
 
 
 # TEST SOME STUFF
