@@ -176,6 +176,41 @@ void coo_mul_vec_f64(void *out, void **in) {
   }
 }
 
+void coo_mul_vec_c128(void *out, void **in) {
+  // get args
+  int n_col = *reinterpret_cast<int *>(in[0]);
+  int n_lhs = *reinterpret_cast<int *>(in[1]);
+  int n_rhs = *reinterpret_cast<int *>(in[2]);
+  int Anz = *reinterpret_cast<int *>(in[3]);
+  int *Ai = reinterpret_cast<int *>(in[4]);
+  int *Aj = reinterpret_cast<int *>(in[5]);
+  double *Ax = reinterpret_cast<double *>(in[6]);
+  double *b = reinterpret_cast<double *>(in[7]);
+  double *result = reinterpret_cast<double *>(out);
+
+  // initialize empty result
+  for (int i = 0; i < 2 * n_lhs * n_col * n_rhs; i++) {
+    result[i] = 0.0;
+  }
+
+  // fill result
+  for (int i = 0; i < n_lhs; i++) {
+    int m = 2 * i * Anz;
+    int n = 2 * i * n_rhs * n_col;
+    for (int j = 0; j < n_rhs; j++) {
+      for (int k = 0; k < Anz; k++) {
+        result[n + 2 * (Ai[k] + j * n_col)] +=               // real part
+            Ax[m + 2 * k] * b[n + 2 * (Aj[k] + j * n_col)] - // real * real
+            Ax[m + 2 * k + 1] *
+                b[n + 2 * (Aj[k] + j * n_col) + 1];              // imag * imag
+        result[n + 2 * (Ai[k] + j * n_col) + 1] +=               // imag part
+            Ax[m + 2 * k] * b[n + 2 * (Aj[k] + j * n_col) + 1] + // real * imag
+            Ax[m + 2 * k + 1] * b[n + 2 * (Aj[k] + j * n_col)];  // imag * real
+      }
+    }
+  }
+}
+
 PYBIND11_MODULE(klujax_cpp, m) {
   m.def(
       "solve_f64",
@@ -198,4 +233,11 @@ PYBIND11_MODULE(klujax_cpp, m) {
         return py::capsule((void *)&coo_mul_vec_f64, name);
       },
       "Multiply a real-valued COO sparse matrix with a vector.");
+  m.def(
+      "coo_mul_vec_c128",
+      []() {
+        const char *name = "xla._CUSTOM_CALL_TARGET";
+        return py::capsule((void *)&coo_mul_vec_c128, name);
+      },
+      "Multiply a complex-valued COO sparse matrix with a vector.");
 }

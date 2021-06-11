@@ -35,6 +35,7 @@ COMPLEX_DTYPES = (
 solve_f64 = core.Primitive("solve_f64")
 solve_c128 = core.Primitive("solve_c128")
 coo_mul_vec_f64 = core.Primitive("coo_mul_vec_f64")
+coo_mul_vec_c128 = core.Primitive("coo_mul_vec_c128")
 
 
 ## EXTRA DECORATORS
@@ -84,6 +85,7 @@ def vmap_register(primitive, operation):
 @solve_f64.def_impl
 @solve_c128.def_impl
 @coo_mul_vec_f64.def_impl
+@coo_mul_vec_c128.def_impl
 def coo_vec_operation_impl(Ai, Aj, Ax, b):
     raise NotImplementedError
 
@@ -94,6 +96,7 @@ def coo_vec_operation_impl(Ai, Aj, Ax, b):
 @solve_f64.def_abstract_eval
 @solve_c128.def_abstract_eval
 @coo_mul_vec_f64.def_abstract_eval
+@coo_mul_vec_c128.def_abstract_eval
 def coo_vec_operation_impl(Ai, Aj, Ax, b):
     return abstract_arrays.ShapedArray(b.shape, b.dtype)
 
@@ -104,6 +107,7 @@ def coo_vec_operation_impl(Ai, Aj, Ax, b):
 @xla_register_cpu(solve_f64, klujax_cpp.solve_f64)
 @xla_register_cpu(solve_c128, klujax_cpp.solve_c128)
 @xla_register_cpu(coo_mul_vec_f64, klujax_cpp.coo_mul_vec_f64)
+@xla_register_cpu(coo_mul_vec_c128, klujax_cpp.coo_mul_vec_c128)
 def coo_vec_operation_xla(primitive_name, c, Ai, Aj, Ax, b):
     Ax_shape = c.get_shape(Ax)
     Ai_shape = c.get_shape(Ai)
@@ -214,12 +218,20 @@ def solve(Ai, Aj, Ax, b):
 
 @jax.jit  # jitting by default allows for empty implementation definitions
 def coo_mul_vec(Ai, Aj, Ax, b):
-    result = coo_mul_vec_f64.bind(
-        Ai.astype(jnp.int32),
-        Aj.astype(jnp.int32),
-        Ax.astype(jnp.float64),
-        b.astype(jnp.float64),
-    )
+    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
+        result = coo_mul_vec_c128.bind(
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            Ax.astype(jnp.complex128),
+            b.astype(jnp.complex128),
+        )
+    else:
+        result = coo_mul_vec_f64.bind(
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            Ax.astype(jnp.float64),
+            b.astype(jnp.float64),
+        )
     return result
 
 
@@ -229,6 +241,7 @@ def coo_mul_vec(Ai, Aj, Ax, b):
 @vmap_register(solve_f64, solve)
 @vmap_register(solve_c128, solve)
 @vmap_register(coo_mul_vec_f64, coo_mul_vec)
+@vmap_register(coo_mul_vec_c128, coo_mul_vec)
 def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
     aAi, aAj, aAx, ab = batch_axes
     Ai, Aj, Ax, b = vector_arg_values
