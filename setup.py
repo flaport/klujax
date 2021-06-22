@@ -36,7 +36,7 @@ klujax_cpp = Extension(
 
 setup(
     name="klujax",
-    version="0.0.0",
+    version="0.0.1",
     author="Floris Laporte",
     author_email="floris.laporte@gmail.com",
     description="a KLU solver for JAX",
@@ -46,6 +46,7 @@ setup(
     py_modules=["klujax"],
     ext_modules=[klujax_cpp],
     cmdclass={"build_ext": build_ext},
+    install_requires=["jax==0.2.14", "jaxlib==0.1.67"],
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Programming Language :: Python :: 3",
