@@ -1,5 +1,8 @@
 """ klujax: a KLU solver for JAX """
 
+__version__ = "0.0.1"
+__author__ = "Floris Laporte"
+
 __all__ = ["solve"]
 
 ## IMPORTS
