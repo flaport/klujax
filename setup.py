@@ -8,18 +8,20 @@ python = f"python{sys.version_info.major}.{sys.version_info.minor}"
 site_packages = os.path.abspath(os.path.expanduser(site.getsitepackages()[0]))
 env = os.path.dirname(os.path.dirname(os.path.dirname(site_packages)))
 
-
 klujax_cpp = Extension(
     name="klujax_cpp",
     sources=["klujax.cpp"],
     include_dirs=[
         os.path.join(env, "include"),
+        os.path.join(env, "include", "suitesparse"),
         os.path.join(env, "include", python),
         os.path.join(site_packages, "pybind11", "include"),
     ],
     library_dirs=[
         os.path.join(env, "lib"),
+        os.path.join(env, "lib64"),
         os.path.join(env, "lib", python),
+        os.path.join(env, "lib64", python),
         site_packages,
     ],
     extra_compile_args=[],
@@ -45,8 +47,8 @@ setup(
     url="https://github.com/flaport/klujax",
     py_modules=["klujax"],
     ext_modules=[klujax_cpp],
-    cmdclass={"build_ext": build_ext},
-    install_requires=["jax==0.2.14", "jaxlib==0.1.67"],
+    cmdclass={"build_ext": build_ext},  # type: ignore
+    install_requires=["jax", "jaxlib"],
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Programming Language :: Python :: 3",
