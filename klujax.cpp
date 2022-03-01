@@ -1,3 +1,6 @@
+// version: 0.0.4
+// author: Floris Laporte
+
 #include <iostream>
 #include <vector>
 
