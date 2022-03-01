@@ -1,9 +1,9 @@
 """ klujax: a KLU solver for JAX """
 
-__version__ = "0.0.2"
+__version__ = "0.0.4"
 __author__ = "Floris Laporte"
 
-__all__ = ["solve"]
+__all__ = ["solve", "coo_mul_vec"]
 
 ## IMPORTS
 
@@ -181,7 +181,7 @@ def solve_f64_value_and_jvp(arg_values, arg_tangents):
     db = db if not isinstance(db, ad.Zero) else lax.zeros_like_array(b)
 
     x = solve(Ai, Aj, Ax, b)
-    dA_x = mul_coo_vec(Ai, Aj, dAx, x)
+    dA_x = coo_mul_vec(Ai, Aj, dAx, x)
     dx = solve(Ai, Aj, Ax, db)  # - dA_x)
 
     return x, dx
