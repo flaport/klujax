@@ -61,4 +61,10 @@ setup(
         "Operating System :: OS Independent",
         "Topic :: Scientific/Engineering :: Mathematics",
     ],
+    package_data={
+        "*": [
+            "LICENSE",
+            "README.md",
+        ],
+    },
 )
