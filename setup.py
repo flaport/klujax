@@ -46,7 +46,7 @@ setup(
     author="Floris Laporte",
     author_email="floris.laporte@gmail.com",
     description="a KLU solver for JAX",
-    long_description=open("readme.md", "r").read(),
+    long_description=open("README.md", "r").read(),
     long_description_content_type="text/markdown",
     url="https://github.com/flaport/klujax",
     py_modules=["klujax"],
