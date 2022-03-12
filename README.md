@@ -8,7 +8,7 @@ efficient [KLU algorithm](https://ufdcimages.uflib.ufl.edu/UF/E0/01/17/21/00001/
 This library is a wrapper around the [SuiteSparse](https://github.com/DrTimothyAldenDavis/SuiteSparse) KLU
 algorithms. This means the algorithm is only implemented for
 C-arrays and hence is **only available for CPU
-arrays with precision**, i.e. float64 or complex128.
+arrays with double precision**, i.e. float64 or complex128.
 
 Note that this will be enforced at import of `klujax`!
 
@@ -40,8 +40,10 @@ print(jnp.abs(result - result_ref) < 1e-12)
 print(result)
 ```
 
-`[ True True True True True]`
-`[1. 2. 3. 4. 5.]`
+```
+[ True True True True True]
+[1. 2. 3. 4. 5.]
+```
 
 ## Installation
 
