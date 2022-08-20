@@ -7,19 +7,20 @@ __all__ = ["solve", "coo_mul_vec"]
 
 ## IMPORTS
 
-from time import time
 from functools import partial
+from time import time
 
 import jax
+import jax.numpy as jnp
 import numpy as np
+from jax import core, lax
+from jax._src.ad_util import Zero
+from jax.core import ShapedArray
+from jax.interpreters import ad, batching, xla
+from jaxlib import xla_client
 
 jax.config.update("jax_enable_x64", True)
 jax.config.update("jax_platform_name", "cpu")
-
-import jax.numpy as jnp
-from jax import abstract_arrays, core, lax
-from jax.interpreters import ad, batching, xla
-from jax.lib import xla_client
 
 import klujax_cpp
 
@@ -100,8 +101,8 @@ def coo_vec_operation_impl(Ai, Aj, Ax, b):
 @solve_c128.def_abstract_eval
 @coo_mul_vec_f64.def_abstract_eval
 @coo_mul_vec_c128.def_abstract_eval
-def coo_vec_operation_impl(Ai, Aj, Ax, b):
-    return abstract_arrays.ShapedArray(b.shape, b.dtype)
+def coo_vec_operation_abstract_eval(Ai, Aj, Ax, b):
+    return ShapedArray(b.shape, b.dtype)
 
 
 # ENABLE JIT
@@ -118,7 +119,7 @@ def coo_vec_operation_xla(primitive_name, c, Ai, Aj, Ax, b):
     b_shape = c.get_shape(b)
     *_n_lhs_list, _Anz = Ax_shape.dimensions()
     assert len(_n_lhs_list) < 2, "solve alows for maximum one batch dimension."
-    _n_lhs = np.prod(np.array(_n_lhs_list, np.int32))
+    _n_lhs = int(np.prod(np.array(_n_lhs_list, np.int32)))
     Ax = xla_client.ops.Reshape(Ax, (_n_lhs * _Anz,))
     Ax_shape = c.get_shape(Ax)
     if _n_lhs_list:
@@ -127,7 +128,8 @@ def coo_vec_operation_xla(primitive_name, c, Ai, Aj, Ax, b):
         _n_col, *_n_rhs_list = b_shape.dimensions()
         _n_lhs_b = 1
     assert _n_lhs_b == _n_lhs, "Batch dimension of Ax and b don't match."
-    _n_rhs = np.prod(np.array(_n_rhs_list, dtype=np.int32))
+    _n_col = int(_n_col)
+    _n_rhs = int(np.prod(np.array(_n_rhs_list, dtype=np.int32)))
     b = xla_client.ops.Reshape(b, (_n_lhs, _n_col, _n_rhs))
     b = xla_client.ops.Transpose(b, (0, 2, 1))
     b = xla_client.ops.Reshape(b, (_n_lhs * _n_rhs * _n_col,))
@@ -175,10 +177,10 @@ def solve_f64_value_and_jvp(arg_values, arg_tangents):
     # ∂x = A^{-1} (∂b - ∂A x)
     Ai, Aj, Ax, b = arg_values
     dAi, dAj, dAx, db = arg_tangents
-    dAx = dAx if not isinstance(dAx, ad.Zero) else lax.zeros_like_array(Ax)
-    dAi = dAi if not isinstance(dAi, ad.Zero) else lax.zeros_like_array(Ai)
-    dAj = dAj if not isinstance(dAj, ad.Zero) else lax.zeros_like_array(Aj)
-    db = db if not isinstance(db, ad.Zero) else lax.zeros_like_array(b)
+    dAx = dAx if not isinstance(dAx, Zero) else lax.zeros_like_array(Ax)
+    dAi = dAi if not isinstance(dAi, Zero) else lax.zeros_like_array(Ai)
+    dAj = dAj if not isinstance(dAj, Zero) else lax.zeros_like_array(Aj)
+    db = db if not isinstance(db, Zero) else lax.zeros_like_array(b)
 
     x = solve(Ai, Aj, Ax, b)
     dA_x = coo_mul_vec(Ai, Aj, dAx, x)
