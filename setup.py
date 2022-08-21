@@ -42,7 +42,7 @@ klujax_cpp = Extension(
 
 setup(
     name="klujax",
-    version="0.0.6",
+    version="0.1.0",
     author="Floris Laporte",
     author_email="floris.laporte@gmail.com",
     description="a KLU solver for JAX",
