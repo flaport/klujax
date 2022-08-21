@@ -2,10 +2,11 @@
 
 __version__ = "0.0.6"
 __author__ = "Floris Laporte"
-
 __all__ = ["solve", "coo_mul_vec"]
 
-## IMPORTS
+
+# Imports =============================================================================
+
 
 from functools import partial
 from time import time
@@ -14,17 +15,22 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import core, lax
-from jax._src.ad_util import Zero
 from jax.core import ShapedArray
 from jax.interpreters import ad, batching, xla
 from jaxlib import xla_client
 
+import klujax_cpp
+
+
+# Config ==============================================================================
+
+
 jax.config.update("jax_enable_x64", True)
 jax.config.update("jax_platform_name", "cpu")
 
-import klujax_cpp
 
-## CONSTANTS
+# Constants ===========================================================================
+
 
 COMPLEX_DTYPES = (
     np.complex64,
@@ -34,7 +40,9 @@ COMPLEX_DTYPES = (
     jnp.complex128,
 )
 
-## PRIMITIVES
+
+# Primitives ==========================================================================
+
 
 solve_f64 = core.Primitive("solve_f64")
 solve_c128 = core.Primitive("solve_c128")
@@ -42,7 +50,7 @@ coo_mul_vec_f64 = core.Primitive("coo_mul_vec_f64")
 coo_mul_vec_c128 = core.Primitive("coo_mul_vec_c128")
 
 
-## EXTRA DECORATORS
+# Helper Decorators ===================================================================
 
 
 def xla_register_cpu(primitive, cpp_fun):
@@ -83,7 +91,48 @@ def vmap_register(primitive, operation):
     return decorator
 
 
-## IMPLEMENTATIONS
+# The Functions =======================================================================
+
+
+@jax.jit  # jitting by default allows for empty implementation definitions
+def solve(Ai, Aj, Ax, b):
+    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
+        result = solve_c128.bind(
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            Ax.astype(jnp.complex128),
+            b.astype(jnp.complex128),
+        )
+    else:
+        result = solve_f64.bind(
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            Ax.astype(jnp.float64),
+            b.astype(jnp.float64),
+        )
+    return result
+
+
+@jax.jit  # jitting by default allows for empty implementation definitions
+def coo_mul_vec(Ai, Aj, Ax, b):
+    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
+        result = coo_mul_vec_c128.bind(
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            Ax.astype(jnp.complex128),
+            b.astype(jnp.complex128),
+        )
+    else:
+        result = coo_mul_vec_f64.bind(
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            Ax.astype(jnp.float64),
+            b.astype(jnp.float64),
+        )
+    return result
+
+
+# Implementation ======================================================================
 
 
 @solve_f64.def_impl
@@ -91,10 +140,11 @@ def vmap_register(primitive, operation):
 @coo_mul_vec_f64.def_impl
 @coo_mul_vec_c128.def_impl
 def coo_vec_operation_impl(Ai, Aj, Ax, b):
+    # No implementations needed, as function is jitted by default (see above)
     raise NotImplementedError
 
 
-## ABSTRACT EVALUATIONS
+# Abstract Evaluations ================================================================
 
 
 @solve_f64.def_abstract_eval
@@ -105,7 +155,7 @@ def coo_vec_operation_abstract_eval(Ai, Aj, Ax, b):
     return ShapedArray(b.shape, b.dtype)
 
 
-# ENABLE JIT
+# XLA Implementations =================================================================
 
 
 @xla_register_cpu(solve_f64, klujax_cpp.solve_f64)
@@ -167,86 +217,71 @@ def coo_vec_operation_xla(primitive_name, c, Ai, Aj, Ax, b):
     return result
 
 
-## # ENABLE FORWARD GRAD
-##
-##
-## @ad_register(solve_f64)
-## def solve_f64_value_and_jvp(arg_values, arg_tangents):
-##     # A x - b = 0
-##     # ∂A x + A ∂x - ∂b = 0
-##     # ∂x = A^{-1} (∂b - ∂A x)
-##     Ai, Aj, Ax, b = arg_values
-##     dAi, dAj, dAx, db = arg_tangents
-##     dAx = dAx if not isinstance(dAx, Zero) else lax.zeros_like_array(Ax)
-##     dAi = dAi if not isinstance(dAi, Zero) else lax.zeros_like_array(Ai)
-##     dAj = dAj if not isinstance(dAj, Zero) else lax.zeros_like_array(Aj)
-##     db = db if not isinstance(db, Zero) else lax.zeros_like_array(b)
-##
-##     x = solve(Ai, Aj, Ax, b)
-##     dA_x = solve(Ai, Aj, dAx, x)
-##     invA_dA_x = solve(Ai, Aj, Ax, dA_x)
-##     invA_db = solve(Ai, Aj, Ax, db)
-##     return x, -invA_dA_x + invA_db
-##
-##
-## # ENABLE BACKWARD GRAD
-##
-##
-## @transpose_register(solve_f64)
-## def solve_f64_transpose(ct, Ai, Aj, Ax, b):
-##     # nonlinear in first argument, linear in second argument
-##     if not ad.is_undefined_primal(Ax) and ad.is_undefined_primal(b):
-##         if type(ct) is ad.Zero:
-##             ct_b = ad.Zero(b.aval)
-##         else:
-##             ct_b = solve(Ai, Aj, Ax, ct)
-##         return [None, None, None, ct_b]
-##     elif ad.is_undefined_primal(Ax) and not ad.is_undefined_primal(b):
-##         return [None, None, None, b]
+# Forward Gradients ===================================================================
 
 
-## THE FUNCTIONS
+@ad_register(solve_f64)
+@ad_register(solve_c128)
+def solve_value_and_jvp(arg_values, arg_tangents):
+    Ai, Aj, Ax, b = arg_values
+    dAi, dAj, dAx, db = arg_tangents
+    dAx = dAx if not isinstance(dAx, ad.Zero) else lax.zeros_like_array(Ax)
+    dAi = dAi if not isinstance(dAi, ad.Zero) else lax.zeros_like_array(Ai)
+    dAj = dAj if not isinstance(dAj, ad.Zero) else lax.zeros_like_array(Aj)
+    db = db if not isinstance(db, ad.Zero) else lax.zeros_like_array(b)
+    x = solve(Ai, Aj, Ax, b)
+    dA_x = coo_mul_vec(Ai, Aj, dAx, x)
+    invA_dA_x = solve(Ai, Aj, Ax, dA_x)
+    invA_db = solve(Ai, Aj, Ax, db)
+    return x, -invA_dA_x + invA_db
 
 
-@jax.jit  # jitting by default allows for empty implementation definitions
-def solve(Ai, Aj, Ax, b):
-    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
-        result = solve_c128.bind(
-            Ai.astype(jnp.int32),
-            Aj.astype(jnp.int32),
-            Ax.astype(jnp.complex128),
-            b.astype(jnp.complex128),
-        )
+@ad_register(coo_mul_vec_f64)
+@ad_register(coo_mul_vec_c128)
+def coo_mul_vec_value_and_jvp(arg_values, arg_tangents):
+    Ai, Aj, Ax, b = arg_values
+    dAi, dAj, dAx, db = arg_tangents
+    dAx = dAx if not isinstance(dAx, ad.Zero) else lax.zeros_like_array(Ax)
+    dAi = dAi if not isinstance(dAi, ad.Zero) else lax.zeros_like_array(Ai)
+    dAj = dAj if not isinstance(dAj, ad.Zero) else lax.zeros_like_array(Aj)
+    db = db if not isinstance(db, ad.Zero) else lax.zeros_like_array(b)
+    x = coo_mul_vec(Ai, Aj, Ax, b)
+    dA_b = coo_mul_vec(Ai, Aj, dAx, b)
+    A_db = coo_mul_vec(Ai, Aj, Ax, db)
+    return x, dA_b + A_db
+
+
+# Backward Gradients through Transposition ============================================
+
+
+@transpose_register(solve_f64)
+@transpose_register(solve_c128)
+def solve_transpose(ct, Ai, Aj, Ax, b):
+    assert not ad.is_undefined_primal(Ai)
+    assert not ad.is_undefined_primal(Aj)
+    assert not ad.is_undefined_primal(Ax)
+    assert ad.is_undefined_primal(b)
+    if type(ct) is ad.Zero:
+        cot_b = ad.Zero(b.aval)
     else:
-        result = solve_f64.bind(
-            Ai.astype(jnp.int32),
-            Aj.astype(jnp.int32),
-            Ax.astype(jnp.float64),
-            b.astype(jnp.float64),
-        )
-    return result
+        cot_b = solve(Aj, Ai, Ax, ct)  # = inv(A).T @ ct  [= ct @ inv(A)]
+    return Ai, Aj, Ax, cot_b
 
 
-@jax.jit  # jitting by default allows for empty implementation definitions
-def coo_mul_vec(Ai, Aj, Ax, b):
-    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
-        result = coo_mul_vec_c128.bind(
-            Ai.astype(jnp.int32),
-            Aj.astype(jnp.int32),
-            Ax.astype(jnp.complex128),
-            b.astype(jnp.complex128),
-        )
+@transpose_register(coo_mul_vec_f64)
+@transpose_register(coo_mul_vec_c128)
+def coo_mul_vec_transpose(ct, Ai, Aj, Ax, b):
+    assert not ad.is_undefined_primal(Ai)
+    assert not ad.is_undefined_primal(Aj)
+    assert ad.is_undefined_primal(Ax) != ad.is_undefined_primal(b)
+
+    if ad.is_undefined_primal(b):
+        return Ai, Aj, Ax, coo_mul_vec(Aj, Ai, Ax, ct)  # = A.T @ ct  [= ct @ A]
     else:
-        result = coo_mul_vec_f64.bind(
-            Ai.astype(jnp.int32),
-            Aj.astype(jnp.int32),
-            Ax.astype(jnp.float64),
-            b.astype(jnp.float64),
-        )
-    return result
+        return Ai, Aj, (ct[Ai] * b[Aj]).mean(-1), b
 
 
-# ENABLE VMAP
+# Vectorization (vmap) ================================================================
 
 
 @vmap_register(solve_f64, solve)
@@ -293,65 +328,8 @@ def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
     raise ValueError("invalid arguments for vmap")
 
 
-# CUSTOM JVP AND VJP
-# Let's do it like this because I can't figure out the transpose rule...
+# Quick Tests =========================================================================
 
-solve = jax.custom_jvp(solve)  # type: ignore
-@solve.defjvp  # type: ignore
-def solve_jvp(primals, tangents):
-    Ai, Aj, Ax, b = primals
-    dAi, dAj, dAx, db = tangents
-    dAx = dAx if not isinstance(dAx, Zero) else lax.zeros_like_array(Ax)
-    dAi = dAi if not isinstance(dAi, Zero) else lax.zeros_like_array(Ai)
-    dAj = dAj if not isinstance(dAj, Zero) else lax.zeros_like_array(Aj)
-    db = db if not isinstance(db, Zero) else lax.zeros_like_array(b)
-
-    x = solve(Ai, Aj, Ax, b)
-    dA_x = solve(Ai, Aj, dAx, x)
-    invA_dA_x = solve(Ai, Aj, Ax, dA_x)
-    invA_db = solve(Ai, Aj, Ax, db)
-    return x, -invA_dA_x + invA_db
-solve = jax.custom_vjp(solve)  # type: ignore
-def solve_fwd(Ai, Aj, Ax, b):
-    x = solve(Ai, Aj, Ax, b)
-    return x, (x,)
-def solve_bwd(res, g):
-    (x,) = res
-    dA_x = solve(Ai, Aj, g, x)
-    invA_dA_x = solve(Ai, Aj, Ax, dA_x)
-    invA_db = solve(Ai, Aj, Ax, g)
-    return None, None, -invA_dA_x, invA_db
-solve.defvjp(solve_fwd, solve_bwd)  # type: ignore
-
-
-
-coo_mul_vec = jax.custom_jvp(coo_mul_vec)  # type: ignore
-@coo_mul_vec.defjvp  # type: ignore
-def coo_mul_vec_jvp(primals, tangents):
-    Ai, Aj, Ax, b = primals
-    dAi, dAj, dAx, db = tangents
-    dAx = dAx if not isinstance(dAx, Zero) else lax.zeros_like_array(Ax)
-    dAi = dAi if not isinstance(dAi, Zero) else lax.zeros_like_array(Ai)
-    dAj = dAj if not isinstance(dAj, Zero) else lax.zeros_like_array(Aj)
-    db = db if not isinstance(db, Zero) else lax.zeros_like_array(b)
-
-    x = coo_mul_vec(Ai, Aj, Ax, b)
-    dA_x = coo_mul_vec(Ai, Aj, dAx, x)
-    A_db = coo_mul_vec(Ai, Aj, Ax, db)
-    return x, dA_x + A_db
-coo_mul_vec = jax.custom_vjp(coo_mul_vec)  # type: ignore
-def coo_mul_vec_fwd(Ai, Aj, Ax, b):
-    x = coo_mul_vec(Ai, Aj, Ax, b)
-    return x, (x,)
-def coo_mul_vec_bwd(res, g):
-    (x,) = res
-    dA_x = coo_mul_vec(Ai, Aj, g, x)
-    A_db = coo_mul_vec(Ai, Aj, Ax, g)
-    return None, None, dA_x, A_db
-coo_mul_vec.defvjp(coo_mul_vec_fwd, coo_mul_vec_bwd)  # type: ignore
-
-
-# TEST SOME STUFF
 
 if __name__ == "__main__":
     A = jnp.array(
