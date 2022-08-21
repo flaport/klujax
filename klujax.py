@@ -167,42 +167,42 @@ def coo_vec_operation_xla(primitive_name, c, Ai, Aj, Ax, b):
     return result
 
 
-# ENABLE FORWARD GRAD
-
-@ad_register(solve_f64)
-def solve_f64_value_and_jvp(arg_values, arg_tangents):
-    # A x - b = 0
-    # ∂A x + A ∂x - ∂b = 0
-    # ∂x = A^{-1} (∂b - ∂A x)
-    Ai, Aj, Ax, b = arg_values
-    dAi, dAj, dAx, db = arg_tangents
-    dAx = dAx if not isinstance(dAx, Zero) else lax.zeros_like_array(Ax)
-    dAi = dAi if not isinstance(dAi, Zero) else lax.zeros_like_array(Ai)
-    dAj = dAj if not isinstance(dAj, Zero) else lax.zeros_like_array(Aj)
-    db = db if not isinstance(db, Zero) else lax.zeros_like_array(b)
-
-    x = solve(Ai, Aj, Ax, b)
-    dA_x = solve(Ai, Aj, dAx, x)
-    invA_dA_x = solve(Ai, Aj, Ax, dA_x)
-    invA_db = solve(Ai, Aj, Ax, db)
-    return x, -invA_dA_x + invA_db
-
-
-
-# ENABLE BACKWARD GRAD
-
-
-@transpose_register(solve_f64)
-def solve_f64_transpose(ct, Ai, Aj, Ax, b):
-    # nonlinear in first argument, linear in second argument
-    if not ad.is_undefined_primal(Ax) and ad.is_undefined_primal(b):
-        if type(ct) is ad.Zero:
-            ct_b = ad.Zero(b.aval)
-        else:
-            ct_b = solve(Ai, Aj, Ax, ct)
-        return [None, None, None, ct_b]
-    elif ad.is_undefined_primal(Ax) and not ad.is_undefined_primal(b):
-        return [None, None, None, b]
+## # ENABLE FORWARD GRAD
+##
+##
+## @ad_register(solve_f64)
+## def solve_f64_value_and_jvp(arg_values, arg_tangents):
+##     # A x - b = 0
+##     # ∂A x + A ∂x - ∂b = 0
+##     # ∂x = A^{-1} (∂b - ∂A x)
+##     Ai, Aj, Ax, b = arg_values
+##     dAi, dAj, dAx, db = arg_tangents
+##     dAx = dAx if not isinstance(dAx, Zero) else lax.zeros_like_array(Ax)
+##     dAi = dAi if not isinstance(dAi, Zero) else lax.zeros_like_array(Ai)
+##     dAj = dAj if not isinstance(dAj, Zero) else lax.zeros_like_array(Aj)
+##     db = db if not isinstance(db, Zero) else lax.zeros_like_array(b)
+##
+##     x = solve(Ai, Aj, Ax, b)
+##     dA_x = solve(Ai, Aj, dAx, x)
+##     invA_dA_x = solve(Ai, Aj, Ax, dA_x)
+##     invA_db = solve(Ai, Aj, Ax, db)
+##     return x, -invA_dA_x + invA_db
+##
+##
+## # ENABLE BACKWARD GRAD
+##
+##
+## @transpose_register(solve_f64)
+## def solve_f64_transpose(ct, Ai, Aj, Ax, b):
+##     # nonlinear in first argument, linear in second argument
+##     if not ad.is_undefined_primal(Ax) and ad.is_undefined_primal(b):
+##         if type(ct) is ad.Zero:
+##             ct_b = ad.Zero(b.aval)
+##         else:
+##             ct_b = solve(Ai, Aj, Ax, ct)
+##         return [None, None, None, ct_b]
+##     elif ad.is_undefined_primal(Ax) and not ad.is_undefined_primal(b):
+##         return [None, None, None, b]
 
 
 ## THE FUNCTIONS
@@ -293,6 +293,64 @@ def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
     raise ValueError("invalid arguments for vmap")
 
 
+# CUSTOM JVP AND VJP
+# Let's do it like this because I can't figure out the transpose rule...
+
+solve = jax.custom_jvp(solve)  # type: ignore
+@solve.defjvp  # type: ignore
+def solve_jvp(primals, tangents):
+    Ai, Aj, Ax, b = primals
+    dAi, dAj, dAx, db = tangents
+    dAx = dAx if not isinstance(dAx, Zero) else lax.zeros_like_array(Ax)
+    dAi = dAi if not isinstance(dAi, Zero) else lax.zeros_like_array(Ai)
+    dAj = dAj if not isinstance(dAj, Zero) else lax.zeros_like_array(Aj)
+    db = db if not isinstance(db, Zero) else lax.zeros_like_array(b)
+
+    x = solve(Ai, Aj, Ax, b)
+    dA_x = solve(Ai, Aj, dAx, x)
+    invA_dA_x = solve(Ai, Aj, Ax, dA_x)
+    invA_db = solve(Ai, Aj, Ax, db)
+    return x, -invA_dA_x + invA_db
+solve = jax.custom_vjp(solve)  # type: ignore
+def solve_fwd(Ai, Aj, Ax, b):
+    x = solve(Ai, Aj, Ax, b)
+    return x, (x,)
+def solve_bwd(res, g):
+    (x,) = res
+    dA_x = solve(Ai, Aj, g, x)
+    invA_dA_x = solve(Ai, Aj, Ax, dA_x)
+    invA_db = solve(Ai, Aj, Ax, g)
+    return None, None, -invA_dA_x, invA_db
+solve.defvjp(solve_fwd, solve_bwd)  # type: ignore
+
+
+
+coo_mul_vec = jax.custom_jvp(coo_mul_vec)  # type: ignore
+@coo_mul_vec.defjvp  # type: ignore
+def coo_mul_vec_jvp(primals, tangents):
+    Ai, Aj, Ax, b = primals
+    dAi, dAj, dAx, db = tangents
+    dAx = dAx if not isinstance(dAx, Zero) else lax.zeros_like_array(Ax)
+    dAi = dAi if not isinstance(dAi, Zero) else lax.zeros_like_array(Ai)
+    dAj = dAj if not isinstance(dAj, Zero) else lax.zeros_like_array(Aj)
+    db = db if not isinstance(db, Zero) else lax.zeros_like_array(b)
+
+    x = coo_mul_vec(Ai, Aj, Ax, b)
+    dA_x = coo_mul_vec(Ai, Aj, dAx, x)
+    A_db = coo_mul_vec(Ai, Aj, Ax, db)
+    return x, dA_x + A_db
+coo_mul_vec = jax.custom_vjp(coo_mul_vec)  # type: ignore
+def coo_mul_vec_fwd(Ai, Aj, Ax, b):
+    x = coo_mul_vec(Ai, Aj, Ax, b)
+    return x, (x,)
+def coo_mul_vec_bwd(res, g):
+    (x,) = res
+    dA_x = coo_mul_vec(Ai, Aj, g, x)
+    A_db = coo_mul_vec(Ai, Aj, Ax, g)
+    return None, None, dA_x, A_db
+coo_mul_vec.defvjp(coo_mul_vec_fwd, coo_mul_vec_bwd)  # type: ignore
+
+
 # TEST SOME STUFF
 
 if __name__ == "__main__":
@@ -341,4 +399,12 @@ if __name__ == "__main__":
     solve_sum_grad = jax.grad(solve_sum, 2)
     t = time()
     result = solve_sum_grad(Ai, Aj, Ax, b)
+    print(f"{time()-t:.3e}", result)
+
+    def coo_mul_vec_sum(Ai, Aj, Ax, b):
+        return coo_mul_vec(Ai, Aj, Ax, b).sum()
+
+    coo_mul_vec_sum_grad = jax.grad(coo_mul_vec_sum, 3)
+    t = time()
+    result = coo_mul_vec_sum_grad(Ai, Aj, Ax, b)
     print(f"{time()-t:.3e}", result)
