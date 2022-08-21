@@ -169,7 +169,6 @@ def coo_vec_operation_xla(primitive_name, c, Ai, Aj, Ax, b):
 
 # ENABLE FORWARD GRAD
 
-
 @ad_register(solve_f64)
 def solve_f64_value_and_jvp(arg_values, arg_tangents):
     # A x - b = 0
@@ -183,10 +182,11 @@ def solve_f64_value_and_jvp(arg_values, arg_tangents):
     db = db if not isinstance(db, Zero) else lax.zeros_like_array(b)
 
     x = solve(Ai, Aj, Ax, b)
-    dA_x = coo_mul_vec(Ai, Aj, dAx, x)
-    dx = solve(Ai, Aj, Ax, db)  # - dA_x)
+    dA_x = solve(Ai, Aj, dAx, x)
+    invA_dA_x = solve(Ai, Aj, Ax, dA_x)
+    invA_db = solve(Ai, Aj, Ax, db)
+    return x, -invA_dA_x + invA_db
 
-    return x, dx
 
 
 # ENABLE BACKWARD GRAD
@@ -194,9 +194,15 @@ def solve_f64_value_and_jvp(arg_values, arg_tangents):
 
 @transpose_register(solve_f64)
 def solve_f64_transpose(ct, Ai, Aj, Ax, b):
-    assert ad.is_undefined_primal(b)
-    ct_b = solve(Ai, Aj, Ax, ct)  # probably not correct...
-    return None, None, None, ct_b
+    # nonlinear in first argument, linear in second argument
+    if not ad.is_undefined_primal(Ax) and ad.is_undefined_primal(b):
+        if type(ct) is ad.Zero:
+            ct_b = ad.Zero(b.aval)
+        else:
+            ct_b = solve(Ai, Aj, Ax, ct)
+        return [None, None, None, ct_b]
+    elif ad.is_undefined_primal(Ax) and not ad.is_undefined_primal(b):
+        return [None, None, None, b]
 
 
 ## THE FUNCTIONS

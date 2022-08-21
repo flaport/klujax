@@ -4,6 +4,9 @@ dist:
 build:
 	python setup.py build_ext --inplace
 
+test:
+	pytest tests.py
+
 clean:
 	find . -name "dist" | xargs rm -rf
 	find . -name "build" | xargs rm -rf
