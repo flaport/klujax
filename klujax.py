@@ -1,6 +1,6 @@
 """ klujax: a KLU solver for JAX """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __author__ = "Floris Laporte"
 __all__ = ["solve", "coo_mul_vec"]
 
