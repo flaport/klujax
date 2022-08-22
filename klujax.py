@@ -260,12 +260,9 @@ def solve_transpose(ct, Ai, Aj, Ax, b):
     assert not ad.is_undefined_primal(Ai)
     assert not ad.is_undefined_primal(Aj)
     assert not ad.is_undefined_primal(Ax)
+    assert not ad.is_undefined_primal(Ax)
     assert ad.is_undefined_primal(b)
-    if type(ct) is ad.Zero:
-        cot_b = ad.Zero(b.aval)
-    else:
-        cot_b = solve(Aj, Ai, Ax, ct)  # = inv(A).T @ ct  [= ct @ inv(A)]
-    return Ai, Aj, Ax, cot_b
+    return None, None, None, solve(Aj, Ai, Ax.conj(), ct)  # = inv(A).H@ct [= ct@inv(A)]
 
 
 @transpose_register(coo_mul_vec_f64)
@@ -273,12 +270,14 @@ def solve_transpose(ct, Ai, Aj, Ax, b):
 def coo_mul_vec_transpose(ct, Ai, Aj, Ax, b):
     assert not ad.is_undefined_primal(Ai)
     assert not ad.is_undefined_primal(Aj)
-    assert ad.is_undefined_primal(Ax) != ad.is_undefined_primal(b)
+    assert ad.is_undefined_primal(Ax) != ad.is_undefined_primal(b)  # xor
 
     if ad.is_undefined_primal(b):
-        return Ai, Aj, Ax, coo_mul_vec(Aj, Ai, Ax, ct)  # = A.T @ ct  [= ct @ A]
+        return None, None, None, coo_mul_vec(Aj, Ai, Ax.conj(), ct)  # = A.T@ct [= ct@A]
     else:
-        return Ai, Aj, (ct[Ai] * b[Aj]).mean(-1), b
+        dA = ct[Ai] * b[Aj]
+        dA = dA.reshape(dA.shape[0], -1).sum(-1)  # not sure about this...
+        return None, None, dA, None
 
 
 # Vectorization (vmap) ================================================================
