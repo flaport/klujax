@@ -58,7 +58,7 @@ attempt to install the library from source. Make sure you have the
 necessary (build-)dependencies installed.
 
 ```bash
-conda install suitesparse
+conda install suitesparse pybind11
 pip install jax
 pip install torch_sparse_solve
 ```

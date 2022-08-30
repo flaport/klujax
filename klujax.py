@@ -1,29 +1,36 @@
 """ klujax: a KLU solver for JAX """
 
-__version__ = "0.0.6"
+__version__ = "0.1.1"
 __author__ = "Floris Laporte"
-
 __all__ = ["solve", "coo_mul_vec"]
 
-## IMPORTS
 
-from time import time
+# Imports =============================================================================
+
+
 from functools import partial
+from time import time
 
 import jax
+import jax.numpy as jnp
 import numpy as np
+from jax import core, lax
+from jax.core import ShapedArray
+from jax.interpreters import ad, batching, xla
+from jaxlib import xla_client
+
+import klujax_cpp
+
+
+# Config ==============================================================================
+
 
 jax.config.update("jax_enable_x64", True)
 jax.config.update("jax_platform_name", "cpu")
 
-import jax.numpy as jnp
-from jax import abstract_arrays, core, lax
-from jax.interpreters import ad, batching, xla
-from jax.lib import xla_client
 
-import klujax_cpp
+# Constants ===========================================================================
 
-## CONSTANTS
 
 COMPLEX_DTYPES = (
     np.complex64,
@@ -33,7 +40,9 @@ COMPLEX_DTYPES = (
     jnp.complex128,
 )
 
-## PRIMITIVES
+
+# Primitives ==========================================================================
+
 
 solve_f64 = core.Primitive("solve_f64")
 solve_c128 = core.Primitive("solve_c128")
@@ -41,7 +50,7 @@ coo_mul_vec_f64 = core.Primitive("coo_mul_vec_f64")
 coo_mul_vec_c128 = core.Primitive("coo_mul_vec_c128")
 
 
-## EXTRA DECORATORS
+# Helper Decorators ===================================================================
 
 
 def xla_register_cpu(primitive, cpp_fun):
@@ -82,122 +91,7 @@ def vmap_register(primitive, operation):
     return decorator
 
 
-## IMPLEMENTATIONS
-
-
-@solve_f64.def_impl
-@solve_c128.def_impl
-@coo_mul_vec_f64.def_impl
-@coo_mul_vec_c128.def_impl
-def coo_vec_operation_impl(Ai, Aj, Ax, b):
-    raise NotImplementedError
-
-
-## ABSTRACT EVALUATIONS
-
-
-@solve_f64.def_abstract_eval
-@solve_c128.def_abstract_eval
-@coo_mul_vec_f64.def_abstract_eval
-@coo_mul_vec_c128.def_abstract_eval
-def coo_vec_operation_impl(Ai, Aj, Ax, b):
-    return abstract_arrays.ShapedArray(b.shape, b.dtype)
-
-
-# ENABLE JIT
-
-
-@xla_register_cpu(solve_f64, klujax_cpp.solve_f64)
-@xla_register_cpu(solve_c128, klujax_cpp.solve_c128)
-@xla_register_cpu(coo_mul_vec_f64, klujax_cpp.coo_mul_vec_f64)
-@xla_register_cpu(coo_mul_vec_c128, klujax_cpp.coo_mul_vec_c128)
-def coo_vec_operation_xla(primitive_name, c, Ai, Aj, Ax, b):
-    Ax_shape = c.get_shape(Ax)
-    Ai_shape = c.get_shape(Ai)
-    Aj_shape = c.get_shape(Aj)
-    b_shape = c.get_shape(b)
-    *_n_lhs_list, _Anz = Ax_shape.dimensions()
-    assert len(_n_lhs_list) < 2, "solve alows for maximum one batch dimension."
-    _n_lhs = np.prod(np.array(_n_lhs_list, np.int32))
-    Ax = xla_client.ops.Reshape(Ax, (_n_lhs * _Anz,))
-    Ax_shape = c.get_shape(Ax)
-    if _n_lhs_list:
-        _n_lhs_b, _n_col, *_n_rhs_list = b_shape.dimensions()
-    else:
-        _n_col, *_n_rhs_list = b_shape.dimensions()
-        _n_lhs_b = 1
-    assert _n_lhs_b == _n_lhs, "Batch dimension of Ax and b don't match."
-    _n_rhs = np.prod(np.array(_n_rhs_list, dtype=np.int32))
-    b = xla_client.ops.Reshape(b, (_n_lhs, _n_col, _n_rhs))
-    b = xla_client.ops.Transpose(b, (0, 2, 1))
-    b = xla_client.ops.Reshape(b, (_n_lhs * _n_rhs * _n_col,))
-    b_shape = c.get_shape(b)
-    Anz = xla_client.ops.ConstantLiteral(c, np.int32(_Anz))
-    n_col = xla_client.ops.ConstantLiteral(c, np.int32(_n_col))
-    n_rhs = xla_client.ops.ConstantLiteral(c, np.int32(_n_rhs))
-    n_lhs = xla_client.ops.ConstantLiteral(c, np.int32(_n_lhs))
-    Anz_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
-    n_col_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
-    n_lhs_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
-    n_rhs_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
-    result = xla_client.ops.CustomCallWithLayout(
-        c,
-        primitive_name,
-        operands=(n_col, n_lhs, n_rhs, Anz, Ai, Aj, Ax, b),
-        operand_shapes_with_layout=(
-            n_col_shape,
-            n_lhs_shape,
-            n_rhs_shape,
-            Anz_shape,
-            Ai_shape,
-            Aj_shape,
-            Ax_shape,
-            b_shape,
-        ),
-        shape_with_layout=b_shape,
-    )
-    result = xla_client.ops.Reshape(result, (_n_lhs, _n_rhs, _n_col))
-    result = xla_client.ops.Transpose(result, (0, 2, 1))
-    if _n_lhs_list:
-        result = xla_client.ops.Reshape(result, (_n_lhs, _n_col, *_n_rhs_list))
-    else:
-        result = xla_client.ops.Reshape(result, (_n_col, *_n_rhs_list))
-    return result
-
-
-# ENABLE FORWARD GRAD
-
-
-@ad_register(solve_f64)
-def solve_f64_value_and_jvp(arg_values, arg_tangents):
-    # A x - b = 0
-    # ∂A x + A ∂x - ∂b = 0
-    # ∂x = A^{-1} (∂b - ∂A x)
-    Ai, Aj, Ax, b = arg_values
-    dAi, dAj, dAx, db = arg_tangents
-    dAx = dAx if not isinstance(dAx, ad.Zero) else lax.zeros_like_array(Ax)
-    dAi = dAi if not isinstance(dAi, ad.Zero) else lax.zeros_like_array(Ai)
-    dAj = dAj if not isinstance(dAj, ad.Zero) else lax.zeros_like_array(Aj)
-    db = db if not isinstance(db, ad.Zero) else lax.zeros_like_array(b)
-
-    x = solve(Ai, Aj, Ax, b)
-    dA_x = coo_mul_vec(Ai, Aj, dAx, x)
-    dx = solve(Ai, Aj, Ax, db)  # - dA_x)
-
-    return x, dx
-
-
-# ENABLE BACKWARD GRAD
-
-
-@transpose_register(solve_f64)
-def solve_f64_transpose(ct, Ai, Aj, Ax, b):
-    assert ad.is_undefined_primal(b)
-    ct_b = solve(Ai, Aj, Ax, ct)  # probably not correct...
-    return None, None, None, ct_b
-
-
-## THE FUNCTIONS
+# The Functions =======================================================================
 
 
 @jax.jit  # jitting by default allows for empty implementation definitions
@@ -238,7 +132,155 @@ def coo_mul_vec(Ai, Aj, Ax, b):
     return result
 
 
-# ENABLE VMAP
+# Implementation ======================================================================
+
+
+@solve_f64.def_impl
+@solve_c128.def_impl
+@coo_mul_vec_f64.def_impl
+@coo_mul_vec_c128.def_impl
+def coo_vec_operation_impl(Ai, Aj, Ax, b):
+    # No implementations needed, as function is jitted by default (see above)
+    raise NotImplementedError
+
+
+# Abstract Evaluations ================================================================
+
+
+@solve_f64.def_abstract_eval
+@solve_c128.def_abstract_eval
+@coo_mul_vec_f64.def_abstract_eval
+@coo_mul_vec_c128.def_abstract_eval
+def coo_vec_operation_abstract_eval(Ai, Aj, Ax, b):
+    return ShapedArray(b.shape, b.dtype)
+
+
+# XLA Implementations =================================================================
+
+
+@xla_register_cpu(solve_f64, klujax_cpp.solve_f64)
+@xla_register_cpu(solve_c128, klujax_cpp.solve_c128)
+@xla_register_cpu(coo_mul_vec_f64, klujax_cpp.coo_mul_vec_f64)
+@xla_register_cpu(coo_mul_vec_c128, klujax_cpp.coo_mul_vec_c128)
+def coo_vec_operation_xla(primitive_name, c, Ai, Aj, Ax, b):
+    Ax_shape = c.get_shape(Ax)
+    Ai_shape = c.get_shape(Ai)
+    Aj_shape = c.get_shape(Aj)
+    b_shape = c.get_shape(b)
+    *_n_lhs_list, _Anz = Ax_shape.dimensions()
+    assert len(_n_lhs_list) < 2, "solve alows for maximum one batch dimension."
+    _n_lhs = int(np.prod(np.array(_n_lhs_list, np.int32)))
+    Ax = xla_client.ops.Reshape(Ax, (_n_lhs * _Anz,))
+    Ax_shape = c.get_shape(Ax)
+    if _n_lhs_list:
+        _n_lhs_b, _n_col, *_n_rhs_list = b_shape.dimensions()
+    else:
+        _n_col, *_n_rhs_list = b_shape.dimensions()
+        _n_lhs_b = 1
+    assert _n_lhs_b == _n_lhs, "Batch dimension of Ax and b don't match."
+    _n_col = int(_n_col)
+    _n_rhs = int(np.prod(np.array(_n_rhs_list, dtype=np.int32)))
+    b = xla_client.ops.Reshape(b, (_n_lhs, _n_col, _n_rhs))
+    b = xla_client.ops.Transpose(b, (0, 2, 1))
+    b = xla_client.ops.Reshape(b, (_n_lhs * _n_rhs * _n_col,))
+    b_shape = c.get_shape(b)
+    Anz = xla_client.ops.ConstantLiteral(c, np.int32(_Anz))
+    n_col = xla_client.ops.ConstantLiteral(c, np.int32(_n_col))
+    n_rhs = xla_client.ops.ConstantLiteral(c, np.int32(_n_rhs))
+    n_lhs = xla_client.ops.ConstantLiteral(c, np.int32(_n_lhs))
+    Anz_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
+    n_col_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
+    n_lhs_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
+    n_rhs_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
+    result = xla_client.ops.CustomCallWithLayout(
+        c,
+        primitive_name,
+        operands=(n_col, n_lhs, n_rhs, Anz, Ai, Aj, Ax, b),
+        operand_shapes_with_layout=(
+            n_col_shape,
+            n_lhs_shape,
+            n_rhs_shape,
+            Anz_shape,
+            Ai_shape,
+            Aj_shape,
+            Ax_shape,
+            b_shape,
+        ),
+        shape_with_layout=b_shape,
+    )
+    result = xla_client.ops.Reshape(result, (_n_lhs, _n_rhs, _n_col))
+    result = xla_client.ops.Transpose(result, (0, 2, 1))
+    if _n_lhs_list:
+        result = xla_client.ops.Reshape(result, (_n_lhs, _n_col, *_n_rhs_list))
+    else:
+        result = xla_client.ops.Reshape(result, (_n_col, *_n_rhs_list))
+    return result
+
+
+# Forward Gradients ===================================================================
+
+
+@ad_register(solve_f64)
+@ad_register(solve_c128)
+def solve_value_and_jvp(arg_values, arg_tangents):
+    Ai, Aj, Ax, b = arg_values
+    dAi, dAj, dAx, db = arg_tangents
+    dAx = dAx if not isinstance(dAx, ad.Zero) else lax.zeros_like_array(Ax)
+    dAi = dAi if not isinstance(dAi, ad.Zero) else lax.zeros_like_array(Ai)
+    dAj = dAj if not isinstance(dAj, ad.Zero) else lax.zeros_like_array(Aj)
+    db = db if not isinstance(db, ad.Zero) else lax.zeros_like_array(b)
+    x = solve(Ai, Aj, Ax, b)
+    dA_x = coo_mul_vec(Ai, Aj, dAx, x)
+    invA_dA_x = solve(Ai, Aj, Ax, dA_x)
+    invA_db = solve(Ai, Aj, Ax, db)
+    return x, -invA_dA_x + invA_db
+
+
+@ad_register(coo_mul_vec_f64)
+@ad_register(coo_mul_vec_c128)
+def coo_mul_vec_value_and_jvp(arg_values, arg_tangents):
+    Ai, Aj, Ax, b = arg_values
+    dAi, dAj, dAx, db = arg_tangents
+    dAx = dAx if not isinstance(dAx, ad.Zero) else lax.zeros_like_array(Ax)
+    dAi = dAi if not isinstance(dAi, ad.Zero) else lax.zeros_like_array(Ai)
+    dAj = dAj if not isinstance(dAj, ad.Zero) else lax.zeros_like_array(Aj)
+    db = db if not isinstance(db, ad.Zero) else lax.zeros_like_array(b)
+    x = coo_mul_vec(Ai, Aj, Ax, b)
+    dA_b = coo_mul_vec(Ai, Aj, dAx, b)
+    A_db = coo_mul_vec(Ai, Aj, Ax, db)
+    return x, dA_b + A_db
+
+
+# Backward Gradients through Transposition ============================================
+
+
+@transpose_register(solve_f64)
+@transpose_register(solve_c128)
+def solve_transpose(ct, Ai, Aj, Ax, b):
+    assert not ad.is_undefined_primal(Ai)
+    assert not ad.is_undefined_primal(Aj)
+    assert not ad.is_undefined_primal(Ax)
+    assert not ad.is_undefined_primal(Ax)
+    assert ad.is_undefined_primal(b)
+    return None, None, None, solve(Aj, Ai, Ax.conj(), ct)  # = inv(A).H@ct [= ct@inv(A)]
+
+
+@transpose_register(coo_mul_vec_f64)
+@transpose_register(coo_mul_vec_c128)
+def coo_mul_vec_transpose(ct, Ai, Aj, Ax, b):
+    assert not ad.is_undefined_primal(Ai)
+    assert not ad.is_undefined_primal(Aj)
+    assert ad.is_undefined_primal(Ax) != ad.is_undefined_primal(b)  # xor
+
+    if ad.is_undefined_primal(b):
+        return None, None, None, coo_mul_vec(Aj, Ai, Ax.conj(), ct)  # = A.T@ct [= ct@A]
+    else:
+        dA = ct[Ai] * b[Aj]
+        dA = dA.reshape(dA.shape[0], -1).sum(-1)  # not sure about this...
+        return None, None, dA, None
+
+
+# Vectorization (vmap) ================================================================
 
 
 @vmap_register(solve_f64, solve)
@@ -285,7 +327,8 @@ def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
     raise ValueError("invalid arguments for vmap")
 
 
-# TEST SOME STUFF
+# Quick Tests =========================================================================
+
 
 if __name__ == "__main__":
     A = jnp.array(
@@ -333,4 +376,12 @@ if __name__ == "__main__":
     solve_sum_grad = jax.grad(solve_sum, 2)
     t = time()
     result = solve_sum_grad(Ai, Aj, Ax, b)
+    print(f"{time()-t:.3e}", result)
+
+    def coo_mul_vec_sum(Ai, Aj, Ax, b):
+        return coo_mul_vec(Ai, Aj, Ax, b).sum()
+
+    coo_mul_vec_sum_grad = jax.grad(coo_mul_vec_sum, 3)
+    t = time()
+    result = coo_mul_vec_sum_grad(Ai, Aj, Ax, b)
     print(f"{time()-t:.3e}", result)
