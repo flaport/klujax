@@ -5,14 +5,6 @@ on:
   push:
     tags:
       - "*"
-#   branches:
-#     - master
-#   paths-ignore:
-#     - ".github/**"
-#     - "!.github/workflows/main.yml"
-#     - "docs/**"
-#     - "*.md"
-#     - ".git*"
 
 jobs:
 
@@ -20,10 +12,9 @@ jobs:
     runs-on: ubuntu-20.04
     timeout-minutes: 14400
     strategy:
-#     fail-fast: true
       max-parallel: 3
       matrix:
-        PYTHON_VERSION: ["3.9", "3.10"]
+        PYTHON_VERSION: ["3.8", "3.9", "3.10"]
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -81,7 +72,7 @@ jobs:
           name: dist-windows
           path: dist
 
-  release:
+  release-wheels:
     runs-on: ubuntu-latest
     needs:
       - build-linux
@@ -106,7 +97,7 @@ jobs:
         run: |
           cp dist/klujax-0.1.1-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-linux_x86_64.whl \
              dist/klujax-0.1.1-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-manylinux2014_x86_64.whl
-          rm "*-linux_x86_64.whl"
+          rm dist/*-linux_x86_64.whl
       - name: Rename Windows wheels
         run: |
           cp dist/klujax-0.1.1-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-win_amd64.whl \
@@ -116,6 +107,23 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
-          fail_on_unmatched_files: false
           files: |
             dist/*.whl
+
+  release-tarball:
+    runs-on: ubuntu-latest
+    needs:
+      - build-linux
+    steps:
+      - name: Download linux build artifact
+        uses: actions/download-artifact@master
+        with:
+          name: dist-linux
+          path: dist
+      - name: Show dist contents
+        run: ls dist
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/*.tar.gz
