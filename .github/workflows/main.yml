@@ -103,7 +103,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            dist/klujax-0.1.2-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-manylinux2014_x86_64.whl \
+            dist/klujax-0.1.2-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-manylinux2014_x86_64.whl
             dist/klujax-0.1.2-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-win_amd64.whl
       - name: Publish to PyPI
         run: |
