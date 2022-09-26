@@ -35,7 +35,7 @@ jax.config.update("jax_platform_name", "cpu")
 COMPLEX_DTYPES = (
     np.complex64,
     np.complex128,
-    np.complex256,
+    #np.complex256,
     jnp.complex64,
     jnp.complex128,
 )
