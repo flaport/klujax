@@ -29,7 +29,7 @@ klujax_cpp = Extension(
         f"{site_packages}",
     ],
     extra_compile_args=[],
-    extra_link_args=["-static-libstdc++"],
+    extra_link_args=["-static-libgcc", "-static-libstdc++"],
     libraries=[
         "klu",
         "btf",
