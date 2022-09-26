@@ -26,7 +26,7 @@ jobs:
         PYTHON_VERSION: ["3.9", "3.10"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v1
+        uses: actions/checkout@v3
       - name: Setup conda environment
         run: |
           curl -L https://github.com/conda-forge/miniforge/releases/latest/download/Mambaforge-Linux-x86_64.sh --output /tmp/conda.sh --silent \
@@ -34,7 +34,7 @@ jobs:
           && rm -rf /tmp/conda.sh \
           && source /opt/conda/etc/profile.d/conda.sh \
           && mamba install -y python=${{ matrix.PYTHON_VERSION }} numpy scipy suitesparse pybind11 build wheel \
-          && pip install jax jaxlib
+          && python -m pip install jax jaxlib
       - name: build library
         run: |
           source /opt/conda/etc/profile.d/conda.sh \
@@ -47,29 +47,75 @@ jobs:
           name: dist-linux
           path: dist
 
+  build-windows:
+    runs-on: windows-2019
+    timeout-minutes: 14400
+    strategy:
+      fail-fast: true
+      max-parallel: 3
+      matrix:
+        PYTHON_VERSION: ["3.8", "3.9", "3.10"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Setup conda environment
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/conda-forge/miniforge/releases/latest/download/Mambaforge-Windows-x86_64.exe" -OutFile "conda.exe"
+          Start-Process "conda.exe" -Wait -ArgumentList @('/S', '/InstallationType=JustMe', '/RegisterPython=1', '/AddToPath=1', "/D=$CondaRoot")
+          $Env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+          conda init powershell
+          $Env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+          mamba install -y python=${{ matrix.PYTHON_VERSION }} numpy scipy suitesparse pybind11 build wheel
+          $Env:PIP_FIND_LINKS = "https://whls.blob.core.windows.net/unstable/index.html"
+          conda activate base
+          python -m pip install jax jaxlib
+      - name: build library
+        run: |
+          conda init powershell
+          conda activate base
+          python setup.py build sdist bdist_wheel
+          ls dist
+      - name: Expose wheel as artifact
+        uses: actions/upload-artifact@master
+        with:
+          name: dist-windows
+          path: dist
+
   release:
     runs-on: ubuntu-latest
     needs:
       - build-linux
+      - build-windows
     strategy:
-#     fail-fast: true
+      fail-fast: true
       max-parallel: 3
       matrix:
-        PYTHON_VERSION: ["39", "310"]
+        PYTHON_VERSION: ["38", "39", "310"]
     steps:
-      - name: Download dist artifact
+      - name: Download linux build artifact
         uses: actions/download-artifact@master
         with:
           name: dist-linux
           path: dist
+      - name: Download windows build artifact
+        uses: actions/download-artifact@master
+        with:
+          name: dist-windows
+          path: dist
       - name: Rename Linux wheels
         run: |
-          mv dist/klujax-0.1.1-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-linux_x86_64.whl \
+          cp dist/klujax-0.1.1-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-linux_x86_64.whl \
              dist/klujax-0.1.1-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-manylinux2014_x86_64.whl
+          rm "*-linux_x86_64.whl"
+      - name: Rename Windows wheels
+        run: |
+          cp dist/klujax-0.1.1-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-win_amd64.whl \
+             dist/klujax-0.1.1-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-win_x86_64.whl
       - name: Show dist contents
         run: ls dist
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
           fail_on_unmatched_files: false
-          files: dist/klujax-0.1.1-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-manylinux2014_x86_64.whl
+          files: |
+            dist/*.whl

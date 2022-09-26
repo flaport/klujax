@@ -1,3 +1,5 @@
+""" klujax installer """
+
 import os
 import sys
 import site
@@ -7,6 +9,16 @@ from setuptools.command.build_ext import build_ext
 python = f"python{sys.version_info.major}.{sys.version_info.minor}"
 site_packages = os.path.abspath(os.path.expanduser(site.getsitepackages()[0]))
 env = os.path.dirname(os.path.dirname(os.path.dirname(site_packages)))
+
+libroot = os.path.dirname(os.path.dirname(os.__file__))
+if os.name == "nt":  # Windows
+    suitesparse_lib = os.path.join(libroot, "Library", "lib")
+    suitesparse_include = os.path.join(libroot, "Library", "include", "suitesparse")
+    pybind11_include = os.path.join(libroot, "Library", "include")
+else:  # Linux / Mac OS
+    suitesparse_lib = os.path.join(os.path.dirname(libroot), "lib")
+    suitesparse_include = os.path.join(os.path.dirname(libroot), "include")
+    pybind11_include = os.path.join(os.path.dirname(libroot), "include")
 
 klujax_cpp = Extension(
     name="klujax_cpp",
@@ -18,6 +30,8 @@ klujax_cpp = Extension(
         f"/usr/include/suitesparse",
         f"{env}/include/{python}",
         f"{site_packages}/pybind11/include",
+        suitesparse_include,
+        pybind11_include,
     ],
     library_dirs=[
         f"{env}/lib",
@@ -27,6 +41,7 @@ klujax_cpp = Extension(
         f"{env}/lib/{python}",
         f"{env}/lib64/{python}",
         f"{site_packages}",
+        suitesparse_lib,
     ],
     extra_compile_args=[],
     extra_link_args=["-static-libgcc", "-static-libstdc++"],
