@@ -47,20 +47,46 @@ print(result)
 
 ## Installation
 
-The library can be installed with `pip`:
+The library is dynamically linked to the SuiteSparse C++ library. The easiest way to
+install is as follows:
 
 ```bash
+conda install pybind11 suitesparse
 pip install klujax
 ```
 
-Please note that no pre-built wheels exist. This means that `pip` will
-attempt to install the library from source. Make sure you have the
-necessary (build-)dependencies installed.
+**There exist pre-built wheels for Linux and Windows (python 3.8+).** If no compatible
+wheel is found, however, pip will attempt to install the library from source... make
+sure you have the necessary build dependencies installed.
 
-```bash
-conda install suitesparse pybind11
-pip install jax
-pip install torch_sparse_solve
+### Linux
+
+On linux, having `gcc` and `g++` available in your path should be sufficient to be able
+to build the library from source.
+
+### Windows
+
+On Windows, installing from source is a bit more involved as typically the build
+dependencies are not installed. To install those, download Visual Studio Community 2017
+from [here](https://my.visualstudio.com/Downloads?q=visual%20studio%202017&wt.mc_id=o~msft~vscom~older-downloads). During installation, go to Workloads and select the following workloads:
+
+- Desktop development with C++
+- Python development
+
+Then go to Individual Components and select the following additional items:
+
+- C++/CLI support
+- VC++ 2015.3 v14.00 (v140) toolset for desktop
+
+Then, download and install Microsoft Visual C++ Redistributable from [here](https://aka.ms/vs/16/release/vc_redist.x64.exe).
+
+After these installation steps, run the following commands inside a x64 Native Tools
+Command Prompt for VS 2017, after activating your conda environment:
+
+```
+set DISTUTILS_USE_SDK=1
+conda install pybind11 suitesparse
+pip install klujax
 ```
 
 ## License & Credits
