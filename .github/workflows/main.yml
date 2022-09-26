@@ -20,9 +20,10 @@ jobs:
     runs-on: ubuntu-20.04
     timeout-minutes: 14400
     strategy:
-      fail-fast: true
+#     fail-fast: true
+      max-parallel: 3
       matrix:
-        PYTHON_VERSION: ["3.10"]
+        PYTHON_VERSION: ["3.9", "3.10"]
     steps:
       - name: Checkout
         uses: actions/checkout@v1
@@ -51,9 +52,10 @@ jobs:
     needs:
       - build-linux
     strategy:
-      fail-fast: true
+#     fail-fast: true
+      max-parallel: 3
       matrix:
-        PYTHON_VERSION: ["310"]
+        PYTHON_VERSION: ["39", "310"]
     steps:
       - name: Download dist artifact
         uses: actions/download-artifact@master
