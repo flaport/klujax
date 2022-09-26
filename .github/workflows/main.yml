@@ -5,18 +5,19 @@ on:
   push:
     tags:
       - "*"
-    branches:
-      - master
-    paths-ignore:
-      - ".github/**"
-      - "!.github/workflows/main.yml"
-      - "docs/**"
-      - "*.md"
-      - ".git*"
+#   branches:
+#     - master
+#   paths-ignore:
+#     - ".github/**"
+#     - "!.github/workflows/main.yml"
+#     - "docs/**"
+#     - "*.md"
+#     - ".git*"
 
 jobs:
+
   build-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     timeout-minutes: 14400
     strategy:
       fail-fast: true
@@ -31,7 +32,7 @@ jobs:
           && bash /tmp/conda.sh -b -p /opt/conda \
           && rm -rf /tmp/conda.sh \
           && source /opt/conda/etc/profile.d/conda.sh \
-          && mamba install -y python=3.10 numpy scipy suitesparse pybind11 build wheel \
+          && mamba install -y python=${{ matrix.PYTHON_VERSION }} numpy scipy suitesparse pybind11 build wheel \
           && pip install jax jaxlib
       - name: build library
         run: |
@@ -42,8 +43,9 @@ jobs:
       - name: Expose wheel as artifact
         uses: actions/upload-artifact@master
         with:
-          name: dist
+          name: dist-linux
           path: dist
+
   release:
     runs-on: ubuntu-latest
     needs:
@@ -56,12 +58,16 @@ jobs:
       - name: Download dist artifact
         uses: actions/download-artifact@master
         with:
-          name: dist
+          name: dist-linux
           path: dist
+      - name: Rename Linux wheels
+        run: |
+          mv dist/klujax-0.1.1-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-linux_x86_64.whl \
+             dist/klujax-0.1.1-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-manylinux2014_x86_64.whl
       - name: Show dist contents
         run: ls dist
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
           fail_on_unmatched_files: false
-          files: dist/klujax-0.1.1-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-linux_x86_64.whl
+          files: dist/klujax-0.1.1-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-manylinux2014_x86_64.whl
