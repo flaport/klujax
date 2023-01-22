@@ -43,8 +43,8 @@ klujax_cpp = Extension(
         f"{site_packages}",
         suitesparse_lib,
     ],
-    extra_compile_args=[],
-    extra_link_args=["-static-libgcc", "-static-libstdc++"],
+    extra_compile_args=["-std=c++11"] if sys.platform=="darwin" else [],
+    extra_link_args= [] if sys.platform=="darwin" else ["-static-libgcc", "-static-libstdc++"],
     libraries=[
         "klu",
         "btf",
