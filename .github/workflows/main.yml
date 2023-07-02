@@ -96,8 +96,8 @@ jobs:
           path: dist
       - name: Rename Linux wheels
         run: |
-          cp dist/klujax-0.1.4-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-linux_x86_64.whl \
-             dist/klujax-0.1.4-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-manylinux2014_x86_64.whl
+          cp dist/klujax-0.2.0-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-linux_x86_64.whl \
+             dist/klujax-0.2.0-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-manylinux2014_x86_64.whl
           rm dist/*-linux_x86_64.whl
       - name: Show dist contents
         run: ls dist
@@ -105,14 +105,14 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            dist/klujax-0.1.4-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-manylinux2014_x86_64.whl
-            dist/klujax-0.1.4-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-win_amd64.whl
+            dist/klujax-0.2.0-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-manylinux2014_x86_64.whl
+            dist/klujax-0.2.0-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-win_amd64.whl
       - name: Publish to PyPI
         run: |
           pip install --user twine \
           && twine upload \
-          dist/klujax-0.1.4-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-manylinux2014_x86_64.whl \
-          dist/klujax-0.1.4-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-win_amd64.whl \
+          dist/klujax-0.2.0-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-manylinux2014_x86_64.whl \
+          dist/klujax-0.2.0-cp${{ matrix.PYTHON_VERSION }}-cp${{ matrix.PYTHON_VERSION }}-win_amd64.whl \
           --username __token__ \
           --password ${{ secrets.PYPI_TOKEN }}
 
@@ -131,11 +131,11 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
-          files: dist/klujax-0.1.4.tar.gz
+          files: dist/klujax-0.2.0.tar.gz
       - name: Publish to PyPI
         run: |
           pip install --user twine \
           && twine upload \
-          dist/klujax-0.1.4.tar.gz \
+          dist/klujax-0.2.0.tar.gz \
           --username __token__ \
           --password ${{ secrets.PYPI_TOKEN }}
