@@ -29,7 +29,7 @@ jobs:
         run: |
           source /opt/conda/etc/profile.d/conda.sh \
           && conda activate base \
-          && git clone --depth 1 --branch stable https://github.com/DrTimothyAldenDavis/SuiteSparse suitesparse
+          && git clone --depth 1 --branch stable https://github.com/DrTimothyAldenDavis/SuiteSparse suitesparse \
           && python setup.py build sdist bdist_wheel \
           && ls dist
       - name: Expose wheel as artifact
@@ -58,6 +58,7 @@ jobs:
           $Env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
           mamba install -y python=${{ matrix.PYTHON_VERSION }} numpy scipy suitesparse pybind11 build wheel
           conda activate base
+          $Env:PIP_FIND_LINKS = "https://whls.blob.core.windows.net/unstable/index.html"
           python -m pip install jax jaxlib
       - name: build library
         run: |
