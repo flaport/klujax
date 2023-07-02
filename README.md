@@ -47,11 +47,10 @@ print(result)
 
 ## Installation
 
-The library is dynamically linked to the SuiteSparse C++ library. The easiest way to
-install is as follows:
+The library is statically linked to the SuiteSparse C++ library. It can be installed on
+most platforms as follows:
 
 ```bash
-conda install pybind11 suitesparse
 pip install klujax
 ```
 
@@ -61,8 +60,7 @@ sure you have the necessary build dependencies installed.
 
 ### Linux
 
-On linux, having `gcc` and `g++` available in your path should be sufficient to be able
-to build the library from source.
+On linux, you'll need `gcc` and `g++` and pybind11 (`pip install pybind11`)
 
 ### Windows
 
@@ -81,12 +79,11 @@ Then go to Individual Components and select the following additional items:
 Then, download and install Microsoft Visual C++ Redistributable from [here](https://aka.ms/vs/16/release/vc_redist.x64.exe).
 
 After these installation steps, run the following commands inside a x64 Native Tools
-Command Prompt for VS 2017, after activating your conda environment:
+Command Prompt for VS 2017:
 
 ```
 set DISTUTILS_USE_SDK=1
-conda install pybind11 suitesparse
-pip install klujax
+pip install pybind11 klujax
 ```
 
 ## License & Credits
