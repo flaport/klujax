@@ -23,7 +23,7 @@ extra_compile_args = {
     "posix": [],
 }
 extra_link_args = {
-    "nt": ["-static-libgcc", "-static-libstdc++"],
+    "nt": [],
     "darwin": [],
     "posix": ["-static-libgcc", "-static-libstdc++"],
 }
