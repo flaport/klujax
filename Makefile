@@ -9,7 +9,8 @@ test:
 	pytest tests.py
 
 suitesparse:
-	git clone --depth 1 --branch stable git@github.com:DrTimothyAldenDavis/SuiteSparse suitesparse || true
+	git clone --depth 1 --branch stable https://github.com/DrTimothyAldenDavis/SuiteSparse suitesparse || true
+	cd suitesparse && rm -rf .git
 
 clean:
 	find . -not -path "./suitesparse*" -name "dist" | xargs rm -rf

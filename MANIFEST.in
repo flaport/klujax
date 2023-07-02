@@ -1,0 +1,12 @@
+klujax.cpp
+include suitesparse/SuiteSparse_config/*.h
+include suitesparse/SuiteSparse_config/*.c
+include suitesparse/AMD/Include/*.h
+include suitesparse/COLAMD/Include/*.h
+include suitesparse/BTF/Include/*.h
+include suitesparse/KLU/Include/*.h
+include suitesparse/AMD/Source/*.c
+include suitesparse/COLAMD/Source/*.c
+include suitesparse/BTF/Source/*.c
+include suitesparse/KLU/Source/*.c
+include suitesparse/LICENSE.txt

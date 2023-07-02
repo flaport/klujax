@@ -28,29 +28,41 @@ extra_link_args = {
     "posix": ["-static-libgcc", "-static-libstdc++"],
 }
 
+sources = [
+    "suitesparse/SuiteSparse_config/SuiteSparse_config.c",
+    *glob("suitesparse/AMD/Source/*.c"),
+    *glob("suitesparse/COLAMD/Source/*.c"),
+    *glob("suitesparse/BTF/Source/*.c"),
+    *glob("suitesparse/KLU/Source/*.c"),
+    "klujax.cpp",
+]
+
+include_dirs = [
+    libroot,
+    pybind11_include[os.name],
+    "suitesparse/SuiteSparse_config",
+    "suitesparse/AMD/Include",
+    "suitesparse/COLAMD/Include",
+    "suitesparse/BTF/Include",
+    "suitesparse/KLU/Include",
+]
+
+library_dirs = [site_packages]
+
+suitesparse_headers = [
+    *glob("suitesparse/SuiteSparse_config/*.h"),
+    *glob("suitesparse/AMD/Include/*.h"),
+    *glob("suitesparse/COLAMD/Include/*.h"),
+    *glob("suitesparse/BTF/Include/*.h"),
+    *glob("suitesparse/KLU/Include/*.h"),
+]
+
 
 klujax_cpp = Extension(
     name="klujax_cpp",
-    sources=[
-        "suitesparse/SuiteSparse_config/SuiteSparse_config.c",
-        *glob("suitesparse/AMD/Source/*.c"),
-        *glob("suitesparse/COLAMD/Source/*.c"),
-        *glob("suitesparse/BTF/Source/*.c"),
-        *glob("suitesparse/KLU/Source/*.c"),
-        "klujax.cpp",
-    ],
-    include_dirs=[
-        libroot,
-        pybind11_include[os.name],
-        "suitesparse/SuiteSparse_config",
-        "suitesparse/AMD/Include",
-        "suitesparse/COLAMD/Include",
-        "suitesparse/BTF/Include",
-        "suitesparse/KLU/Include",
-    ],
-    library_dirs=[
-        site_packages,
-    ],
+    sources=sources,
+    include_dirs=include_dirs,
+    library_dirs=library_dirs,
     extra_compile_args=extra_compile_args[os.name],
     extra_link_args=extra_link_args[os.name],
     language="c++",
@@ -81,6 +93,7 @@ setup(
         "*": [
             "LICENSE",
             "README.md",
+            "MANIFEST.in",
         ],
     },
 )

@@ -60,7 +60,11 @@ sure you have the necessary build dependencies installed.
 
 ### Linux
 
-On linux, you'll need `gcc` and `g++` and pybind11 (`pip install pybind11`)
+On linux, you'll need `gcc` and `g++`. Then just do a normal pip install:
+
+```sh
+pip install klujax
+```
 
 ### Windows
 
@@ -83,7 +87,7 @@ Command Prompt for VS 2017:
 
 ```
 set DISTUTILS_USE_SDK=1
-pip install pybind11 klujax
+pip install klujax
 ```
 
 ## License & Credits
@@ -96,3 +100,10 @@ This library was partly based on:
 - [SuiteSparse](https://github.com/DrTimothyAldenDavis/SuiteSparse), LGPL-2.1
 - [kagami-c/PyKLU](https://github.com/kagami-c/PyKLU), LGPL-2.1
 - [scipy.sparse](https://github.com/scipy/scipy/tree/master/scipy/sparse), BSD-3
+
+This library vendors an unmodified version of the
+[SuiteSparse](https://github.com/DrTimothyAldenDavis/SuiteSparse) libraries in its source
+(.tar.gz) distribution to allow for static linking.
+This is in accordance with their
+[LGPL licence](https://github.com/DrTimothyAldenDavis/SuiteSparse/blob/dev/LICENSE.txt).
+
