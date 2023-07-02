@@ -8,9 +8,8 @@ build:
 test:
 	pytest tests.py
 
-klu:
+suitesparse:
 	git clone --depth 1 --branch stable git@github.com:DrTimothyAldenDavis/SuiteSparse suitesparse || true
-	export CMAKE_OPTIONS="-DNSTATIC=0" && cd suitesparse && sed -i 's/.*GraphBLAS \&\&.*//g' Makefile && make local
 
 clean:
 	find . -not -path "./suitesparse*" -name "dist" | xargs rm -rf

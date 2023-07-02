@@ -3,112 +3,43 @@
 import os
 import sys
 import site
+from glob import glob
 from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext
 
 python = f"python{sys.version_info.major}.{sys.version_info.minor}"
 site_packages = os.path.abspath(os.path.expanduser(site.getsitepackages()[0]))
 env = os.path.dirname(os.path.dirname(os.path.dirname(site_packages)))
-
 libroot = os.path.dirname(os.path.dirname(os.__file__))
 if os.name == "nt":  # Windows
-    suitesparse_lib = os.path.join(libroot, "Library", "lib")
-    suitesparse_include = os.path.join(libroot, "Library", "include", "suitesparse")
     pybind11_include = os.path.join(libroot, "Library", "include")
 else:  # Linux / Mac OS
-    suitesparse_lib = os.path.join(os.path.dirname(libroot), "lib")
-    suitesparse_include = os.path.join(os.path.dirname(libroot), "include")
     pybind11_include = os.path.join(os.path.dirname(libroot), "include")
 
 klujax_cpp = Extension(
     name="klujax_cpp",
-    sources=["klujax.cpp"],
+    sources=[
+        "suitesparse/SuiteSparse_config/SuiteSparse_config.c",
+        *glob("suitesparse/AMD/Source/*.c"),
+        *glob("suitesparse/COLAMD/Source/*.c"),
+        *glob("suitesparse/BTF/Source/*.c"),
+        *glob("suitesparse/KLU/Source/*.c"),
+        "klujax.cpp",
+    ],
     include_dirs=[
-        f"{env}/include",
-        f"/usr/include",
-        f"{env}/include/suitesparse",
-        f"/usr/include/suitesparse",
-        f"{env}/include/{python}",
-        f"{site_packages}/pybind11/include",
-        suitesparse_include,
+        libroot,
         pybind11_include,
-        "./suitesparse/AMD/Include",
-        "./suitesparse/BTF/Include",
-        "./suitesparse/CAMD/Include",
-        "./suitesparse/CCOLAMD/Include",
-        "./suitesparse/CHOLMOD/Demo",
-        "./suitesparse/CHOLMOD/GPU",
-        "./suitesparse/CHOLMOD/Include",
-        "./suitesparse/CHOLMOD/MATLAB",
-        "./suitesparse/CHOLMOD/Partition",
-        "./suitesparse/CHOLMOD/SuiteSparse_metis/GKlib",
-        "./suitesparse/CHOLMOD/SuiteSparse_metis/GKlib/original",
-        "./suitesparse/CHOLMOD/SuiteSparse_metis/include",
-        "./suitesparse/CHOLMOD/SuiteSparse_metis/include/original",
-        "./suitesparse/CHOLMOD/SuiteSparse_metis/libmetis",
-        "./suitesparse/CHOLMOD/SuiteSparse_metis/programs",
-        "./suitesparse/CHOLMOD/Tcov",
-        "./suitesparse/COLAMD/Include",
-        "./suitesparse/CSparse/Demo",
-        "./suitesparse/CSparse/Include",
-        "./suitesparse/CSparse/MATLAB/CSparse",
-        "./suitesparse/CSparse/Tcov",
-        "./suitesparse/CXSparse/Demo",
-        "./suitesparse/CXSparse/Include",
-        "./suitesparse/CXSparse/MATLAB/CSparse",
-        "./suitesparse/CXSparse/Tcov",
-        "./suitesparse/Example/Include",
-        "./suitesparse/KLU/Include",
-        "./suitesparse/KLU/User",
-        "./suitesparse/LDL/Include",
-        "./suitesparse/MATLAB_Tools/SFMULT",
-        "./suitesparse/MATLAB_Tools/sparseinv",
-        "./suitesparse/MATLAB_Tools/spok",
-        "./suitesparse/MATLAB_Tools/SSMULT",
-        "./suitesparse/MATLAB_Tools/waitmex",
-        "./suitesparse/Mongoose/External/mmio/Include",
-        "./suitesparse/RBio/Include",
-        "./suitesparse/SPEX/Include",
-        "./suitesparse/SPEX/SPEX_Left_LU/Demo",
-        "./suitesparse/SPEX/SPEX_Left_LU/MATLAB/Source",
-        "./suitesparse/SPEX/SPEX_Left_LU/Source",
-        "./suitesparse/SPEX/SPEX_Left_LU/Tcov",
-        "./suitesparse/SPEX/SPEX_Util/Source",
-        "./suitesparse/SPQR/Include",
-        "./suitesparse/SuiteSparse_config",
-        "./suitesparse/UMFPACK/Demo",
-        "./suitesparse/UMFPACK/Include",
-        "./suitesparse/UMFPACK/Source",
+        "suitesparse/SuiteSparse_config",
+        "suitesparse/AMD/Include",
+        "suitesparse/COLAMD/Include",
+        "suitesparse/BTF/Include",
+        "suitesparse/KLU/Include",
     ],
     library_dirs=[
-        f"{env}/lib",
-        f"/usr/lib",
-        f"{env}/lib64",
-        f"/usr/lib64",
-        f"{env}/lib/{python}",
-        f"{env}/lib64/{python}",
-        f"{site_packages}",
-        suitesparse_lib,
+        site_packages,
     ],
     extra_compile_args=["-std=c++11"] if sys.platform=="darwin" else [],
     extra_link_args= [] if sys.platform=="darwin" else ["-static-libgcc", "-static-libstdc++"],
-    extra_objects=[
-        "./suitesparse/SuiteSparse_config/build/CMakeFiles/FortranCInterface/libsymbols.a",
-        "./suitesparse/SuiteSparse_config/build/CMakeFiles/FortranCInterface/libmyfort.a",
-        "./suitesparse/SuiteSparse_config/build/libsuitesparseconfig.a",
-        "./suitesparse/AMD/build/libamd.a",
-        "./suitesparse/COLAMD/build/libcolamd.a",
-        "./suitesparse/BTF/build/libbtf.a",
-        "./suitesparse/KLU/build/libklu.a",
-        #"./suitesparse/KLU/build/libklu_cholmod.a",
-    ],
-    libraries=[
-#       "klu",
-#       "btf",
-#       "amd",
-#       "colamd",
-#       "suitesparseconfig",
-    ],
     language="c++",
 )
 
