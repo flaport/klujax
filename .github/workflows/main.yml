@@ -29,7 +29,7 @@ jobs:
         run: |
           source /opt/conda/etc/profile.d/conda.sh \
           && conda activate base \
-          && git clone --depth 1 --branch stable git@github.com:DrTimothyAldenDavis/SuiteSparse suitesparse
+          && git clone --depth 1 --branch stable https://github.com/DrTimothyAldenDavis/SuiteSparse suitesparse
           && python setup.py build sdist bdist_wheel \
           && ls dist
       - name: Expose wheel as artifact
@@ -63,7 +63,7 @@ jobs:
         run: |
           conda init powershell
           conda activate base
-          git clone --depth 1 --branch stable git@github.com:DrTimothyAldenDavis/SuiteSparse suitesparse
+          git clone --depth 1 --branch stable https://github.com/DrTimothyAldenDavis/SuiteSparse suitesparse
           python setup.py build sdist bdist_wheel
           ls dist
       - name: Expose wheel as artifact
