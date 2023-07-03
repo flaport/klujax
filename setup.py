@@ -12,19 +12,25 @@ site_packages = os.path.abspath(os.path.expanduser(site.getsitepackages()[0]))
 env = os.path.dirname(os.path.dirname(os.path.dirname(site_packages)))
 libroot = os.path.dirname(os.path.dirname(os.__file__))
 
+os_name = os.name
+if sys.platform == "darwin":
+    os_name = "darwin"
+
+
+print(f"########### I'm on {os_name} ############")
 pybind11_include = {
     "nt": os.path.join(libroot, "Library", "include"),
-    "darwin": os.path.join(os.path.dirname(libroot), "include"),
+    "darwin": "pybind11/include",#os.path.join(os.path.dirname(libroot), "include"),
     "posix": os.path.join(os.path.dirname(libroot), "include"),
 }
 extra_compile_args = {
     "nt": [],
-    "darwin": ["-std=c++11"],
+    "darwin": [], #"-std=c++11"
     "posix": [],
 }
 extra_link_args = {
     "nt": [],
-    "darwin": [],
+    "darwin": [], #"-static-libgcc", "-static-libstdc++"
     "posix": ["-static-libgcc", "-static-libstdc++"],
 }
 
@@ -39,7 +45,7 @@ sources = [
 
 include_dirs = [
     libroot,
-    pybind11_include[os.name],
+    pybind11_include[os_name],
     "suitesparse/SuiteSparse_config",
     "suitesparse/AMD/Include",
     "suitesparse/COLAMD/Include",
@@ -63,8 +69,8 @@ klujax_cpp = Extension(
     sources=sources,
     include_dirs=include_dirs,
     library_dirs=library_dirs,
-    extra_compile_args=extra_compile_args[os.name],
-    extra_link_args=extra_link_args[os.name],
+    extra_compile_args=extra_compile_args[os_name],
+    extra_link_args=extra_link_args[os_name],
     language="c++",
 )
 
@@ -81,6 +87,7 @@ setup(
     ext_modules=[klujax_cpp],
     cmdclass={"build_ext": build_ext},  # type: ignore
     install_requires=["jax", "jaxlib", "pybind11"],
+    python_requires=">=3.8",
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Programming Language :: Python :: 3",
