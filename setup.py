@@ -12,19 +12,23 @@ site_packages = os.path.abspath(os.path.expanduser(site.getsitepackages()[0]))
 env = os.path.dirname(os.path.dirname(os.path.dirname(site_packages)))
 libroot = os.path.dirname(os.path.dirname(os.__file__))
 
+os_name = os.name
+if sys.platform == "darwin":
+    os_name = "darwin"
+
 pybind11_include = {
-    "nt": os.path.join(libroot, "Library", "include"),
-    "darwin": os.path.join(os.path.dirname(libroot), "include"),
-    "posix": os.path.join(os.path.dirname(libroot), "include"),
+    "nt": "pybind11/include", #os.path.join(libroot, "Library", "include"),
+    "darwin": "pybind11/include", #os.path.join(os.path.dirname(libroot), "include"),
+    "posix": "pybind11/include", #os.path.join(os.path.dirname(libroot), "include"),
 }
 extra_compile_args = {
     "nt": [],
-    "darwin": ["-std=c++11"],
+    "darwin": ["-std=c++11"], #
     "posix": [],
 }
 extra_link_args = {
     "nt": [],
-    "darwin": [],
+    "darwin": [], #"-static-libgcc", "-static-libstdc++"
     "posix": ["-static-libgcc", "-static-libstdc++"],
 }
 
@@ -34,12 +38,13 @@ sources = [
     *glob("suitesparse/COLAMD/Source/*.c"),
     *glob("suitesparse/BTF/Source/*.c"),
     *glob("suitesparse/KLU/Source/*.c"),
-    "klujax.cpp",
 ]
+
+
 
 include_dirs = [
     libroot,
-    pybind11_include[os.name],
+    pybind11_include[os_name],
     "suitesparse/SuiteSparse_config",
     "suitesparse/AMD/Include",
     "suitesparse/COLAMD/Include",
@@ -57,16 +62,39 @@ suitesparse_headers = [
     *glob("suitesparse/KLU/Include/*.h"),
 ]
 
-
-klujax_cpp = Extension(
+if os_name == "darwin":
+  klujax_cpp = Extension(
     name="klujax_cpp",
+    sources=["klujax.cpp"],
+    include_dirs=include_dirs,
+    library_dirs=library_dirs,
+    extra_compile_args=extra_compile_args[os_name],
+    extra_link_args=extra_link_args[os_name],
+    language="c++",
+  )
+
+  sparse_c = Extension(
+    name="sparse_c",
     sources=sources,
     include_dirs=include_dirs,
     library_dirs=library_dirs,
-    extra_compile_args=extra_compile_args[os.name],
-    extra_link_args=extra_link_args[os.name],
+    extra_compile_args=[],
+    extra_link_args=extra_link_args[os_name],
+    language="c",
+  )
+  exts = [sparse_c, klujax_cpp]
+else:
+  klujax_cpp = Extension(
+    name="klujax_cpp",
+    sources=sources+["klujax.cpp"],
+    include_dirs=include_dirs,
+    library_dirs=library_dirs,
+    extra_compile_args=extra_compile_args[os_name],
+    extra_link_args=extra_link_args[os_name],
     language="c++",
-)
+  )
+  exts = [klujax_cpp]
+  
 
 setup(
     name="klujax",
@@ -78,9 +106,10 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/flaport/klujax",
     py_modules=["klujax"],
-    ext_modules=[klujax_cpp],
+    ext_modules=exts,
     cmdclass={"build_ext": build_ext},  # type: ignore
     install_requires=["jax", "jaxlib", "pybind11"],
+    python_requires=">=3.8",
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Programming Language :: Python :: 3",
