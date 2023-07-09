@@ -1,0 +1,37 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - '[0-9].[0-9].[0-9]'
+
+jobs:
+  release:
+    name: Create Release
+    needs: [build_wheels]
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/setup-python@v4
+      with:
+        python-version: "3.x"
+
+    - uses: actions/download-artifact@v3
+      with:
+        name: artifact
+        path: dist
+
+    - name: Show dist contents
+      run: ls dist
+
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          dist/*
+
+    - uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        user: __token__
+        password: ${{ secrets.PYPI_TOKEN }}
+
