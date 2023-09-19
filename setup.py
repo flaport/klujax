@@ -17,18 +17,18 @@ if sys.platform == "darwin":
     os_name = "darwin"
 
 pybind11_include = {
-    "nt": "pybind11/include", #os.path.join(libroot, "Library", "include"),
-    "darwin": "pybind11/include", #os.path.join(os.path.dirname(libroot), "include"),
-    "posix": "pybind11/include", #os.path.join(os.path.dirname(libroot), "include"),
+    "nt": "pybind11/include",
+    "darwin": "pybind11/include",
+    "posix": "pybind11/include",
 }
 extra_compile_args = {
     "nt": [],
-    "darwin": ["-std=c++11"], #
+    "darwin": ["-std=c++11"],  #
     "posix": [],
 }
 extra_link_args = {
     "nt": [],
-    "darwin": [], #"-static-libgcc", "-static-libstdc++"
+    "darwin": [],  # "-static-libgcc", "-static-libstdc++"
     "posix": ["-static-libgcc", "-static-libstdc++"],
 }
 
@@ -39,7 +39,6 @@ sources = [
     *glob("suitesparse/BTF/Source/*.c"),
     *glob("suitesparse/KLU/Source/*.c"),
 ]
-
 
 
 include_dirs = [
@@ -63,38 +62,38 @@ suitesparse_headers = [
 ]
 
 if os_name == "darwin":
-  klujax_cpp = Extension(
-    name="klujax_cpp",
-    sources=["klujax.cpp"],
-    include_dirs=include_dirs,
-    library_dirs=library_dirs,
-    extra_compile_args=extra_compile_args[os_name],
-    extra_link_args=extra_link_args[os_name],
-    language="c++",
-  )
+    klujax_cpp = Extension(
+        name="klujax_cpp",
+        sources=["klujax.cpp"],
+        include_dirs=include_dirs,
+        library_dirs=library_dirs,
+        extra_compile_args=extra_compile_args[os_name],
+        extra_link_args=extra_link_args[os_name],
+        language="c++",
+    )
 
-  sparse_c = Extension(
-    name="sparse_c",
-    sources=sources,
-    include_dirs=include_dirs,
-    library_dirs=library_dirs,
-    extra_compile_args=[],
-    extra_link_args=extra_link_args[os_name],
-    language="c",
-  )
-  exts = [sparse_c, klujax_cpp]
+    sparse_c = Extension(
+        name="sparse_c",
+        sources=sources,
+        include_dirs=include_dirs,
+        library_dirs=library_dirs,
+        extra_compile_args=[],
+        extra_link_args=extra_link_args[os_name],
+        language="c",
+    )
+    exts = [sparse_c, klujax_cpp]
 else:
-  klujax_cpp = Extension(
-    name="klujax_cpp",
-    sources=sources+["klujax.cpp"],
-    include_dirs=include_dirs,
-    library_dirs=library_dirs,
-    extra_compile_args=extra_compile_args[os_name],
-    extra_link_args=extra_link_args[os_name],
-    language="c++",
-  )
-  exts = [klujax_cpp]
-  
+    klujax_cpp = Extension(
+        name="klujax_cpp",
+        sources=sources + ["klujax.cpp"],
+        include_dirs=include_dirs,
+        library_dirs=library_dirs,
+        extra_compile_args=extra_compile_args[os_name],
+        extra_link_args=extra_link_args[os_name],
+        language="c++",
+    )
+    exts = [klujax_cpp]
+
 
 setup(
     name="klujax",

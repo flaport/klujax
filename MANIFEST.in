@@ -1,4 +1,4 @@
-klujax.cpp
+include klujax.cpp
 include suitesparse/SuiteSparse_config/*.h
 include suitesparse/SuiteSparse_config/*.c
 include suitesparse/AMD/Include/*.h
