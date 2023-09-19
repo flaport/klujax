@@ -57,7 +57,7 @@ def xla_register_cpu(primitive, cpp_fun):
     name = primitive.name.encode()
 
     def decorator(fun):
-        xla_client.register_cpu_custom_call_target(
+        xla_client.register_custom_call_target(
             name,
             cpp_fun(),
         )
