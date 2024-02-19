@@ -23,7 +23,7 @@ jobs:
           git clone --depth 1 --branch stable https://github.com/pybind/pybind11 pybind11
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.16.2
+        uses: pypa/cibuildwheel@v2.16.5
         env:
           CIBW_ARCHS_MACOS: x86_64 arm64
 
