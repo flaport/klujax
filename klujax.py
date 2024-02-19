@@ -8,7 +8,7 @@ __all__ = ["solve", "coo_mul_vec"]
 # Imports =============================================================================
 
 
-from functools import partial
+from functools import partial, wraps
 from time import time
 
 import jax
@@ -16,8 +16,11 @@ import jax.numpy as jnp
 import numpy as np
 from jax import core, lax
 from jax.core import ShapedArray
-from jax.interpreters import ad, batching, xla
+from jax.interpreters import ad, batching
 from jaxlib import xla_client
+from jax._src.interpreters.xla import (
+    _backend_specific_translations,
+)
 
 import klujax_cpp
 
@@ -35,7 +38,7 @@ jax.config.update("jax_platform_name", "cpu")
 COMPLEX_DTYPES = (
     np.complex64,
     np.complex128,
-    #np.complex256,
+    # np.complex256,
     jnp.complex64,
     jnp.complex128,
 )
@@ -52,6 +55,17 @@ coo_mul_vec_c128 = core.Primitive("coo_mul_vec_c128")
 
 # Helper Decorators ===================================================================
 
+_cpu_translations = _backend_specific_translations["cpu"]
+
+
+def _wrap_old_translation(f):
+    @wraps(f)
+    def wrapped(ctx, avals_in, avals_out, *args, **kw):
+        ans = f(ctx.builder, *args, **kw)
+        return [ans]
+
+    return wrapped
+
 
 def xla_register_cpu(primitive, cpp_fun):
     name = primitive.name.encode()
@@ -61,7 +75,8 @@ def xla_register_cpu(primitive, cpp_fun):
             name,
             cpp_fun(),
         )
-        xla.backend_specific_translations["cpu"][primitive] = partial(fun, name)
+        _cpu_translations[primitive] = _wrap_old_translation(partial(fun, name))
+        #mlir.register_lowering(primitive, partial(fun, name), 'cpu')
         return fun
 
     return decorator
