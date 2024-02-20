@@ -9,7 +9,7 @@ test:
 	pytest tests.py
 
 suitesparse:
-	git clone --depth 1 --branch stable https://github.com/DrTimothyAldenDavis/SuiteSparse suitesparse || true
+	git clone --depth 1 --branch v7.2.0 https://github.com/DrTimothyAldenDavis/SuiteSparse suitesparse || true
 	cd suitesparse && rm -rf .git
 
 clean:
