@@ -95,6 +95,10 @@ void solve_f64(void *out, void **in) {
   // clean up
   klu_free_symbolic(&Symbolic, &Common);
   klu_free_numeric(&Numeric, &Common);
+  delete[] Bk;
+  delete[] Bi;
+  delete[] Bp;
+  delete[] Bx;
 }
 
 void solve_c128(void *out, void **in) {
@@ -148,6 +152,10 @@ void solve_c128(void *out, void **in) {
   // clean up
   klu_free_symbolic(&Symbolic, &Common);
   klu_free_numeric(&Numeric, &Common);
+  delete[] Bk;
+  delete[] Bi;
+  delete[] Bp;
+  delete[] Bx;
 }
 
 void coo_mul_vec_f64(void *out, void **in) {
