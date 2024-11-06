@@ -98,7 +98,7 @@ else:
 
 setup(
     name="klujax",
-    version="0.2.9",
+    version="0.2.10",
     author="Floris Laporte",
     author_email="floris.laporte@gmail.com",
     description="a KLU solver for JAX",
