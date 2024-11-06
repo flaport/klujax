@@ -1,10 +1,11 @@
 """ klujax installer """
 
 import os
-import sys
 import site
+import sys
 from glob import glob
-from setuptools import setup, Extension
+
+from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
 python = f"python{sys.version_info.major}.{sys.version_info.minor}"
@@ -107,7 +108,7 @@ setup(
     py_modules=["klujax"],
     ext_modules=exts,
     cmdclass={"build_ext": build_ext},  # type: ignore
-    install_requires=["jax", "jaxlib", "pybind11"],
+    install_requires=["jax<0.4.35", "jaxlib<0.4.35", "pybind11"],
     python_requires=">=3.8",
     classifiers=[
         "Development Status :: 3 - Alpha",
