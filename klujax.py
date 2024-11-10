@@ -7,18 +7,18 @@ __all__ = ["solve", "coo_mul_vec"]
 
 # Imports =============================================================================
 
-# stdlib
+
 from functools import partial
 
-# 3rd party
 import jax
-import jax.extend as jex
+import jax.extend
 import jax.numpy as jnp
+import jax.scipy as jsp
 import numpy as np
-from jax import lax
+from jax import core, lax
+from jax.core import ShapedArray
 from jax.interpreters import ad, batching
 
-# this lib
 import klujax_cpp
 
 # Config ==============================================================================
@@ -39,6 +39,40 @@ COMPLEX_DTYPES = (
     jnp.complex128,
 )
 
+
+# Primitives ==========================================================================
+
+
+solve_f64 = core.Primitive("solve_f64")
+solve_c128 = core.Primitive("solve_c128")
+coo_mul_vec_f64 = core.Primitive("coo_mul_vec_f64")
+coo_mul_vec_c128 = core.Primitive("coo_mul_vec_c128")
+
+# Register XLA Extensions ==============================================================
+
+jax.extend.ffi.register_ffi_target(
+    "_solve_f64",
+    klujax_cpp.solve_f64(),
+    platform="cpu",
+)
+
+jax.extend.ffi.register_ffi_target(
+    "_coo_mul_vec_f64",
+    klujax_cpp.coo_mul_vec_f64(),
+    platform="cpu",
+)
+
+jax.extend.ffi.register_ffi_target(
+    "_solve_c128",
+    klujax_cpp.solve_c128(),
+    platform="cpu",
+)
+
+jax.extend.ffi.register_ffi_target(
+    "_coo_mul_vec_c128",
+    klujax_cpp.coo_mul_vec_c128(),
+    platform="cpu",
+)
 
 # Helper Decorators ===================================================================
 
@@ -67,64 +101,135 @@ def vmap_register(primitive, operation):
     return decorator
 
 
-# Register XLA Extensions ==============================================================
-
-jex.ffi.register_ffi_target(
-    "solve_f64",
-    klujax_cpp.solve_f64(),
-    platform="cpu",
-)
-
-jex.ffi.register_ffi_target(
-    "coo_mul_vec_f64",
-    klujax_cpp.coo_mul_vec_f64(),
-    platform="cpu",
-)
-
-jex.ffi.register_ffi_target(
-    "solve_c128",
-    klujax_cpp.solve_c128(),
-    platform="cpu",
-)
-
-jex.ffi.register_ffi_target(
-    "coo_mul_vec_c128",
-    klujax_cpp.coo_mul_vec_c128(),
-    platform="cpu",
-)
-
-# The Main Functions ==================================================================
+# The Functions =======================================================================
 
 
 def solve(Ai, Aj, Ax, b):
-    Ai = jnp.asarray(Ai)
-    Aj = jnp.asarray(Aj)
-    Ax = jnp.asarray(Ax)
-    b = jnp.asarray(b)
-    shape = b.shape
-
-    if b.ndim < 2:
-        b = jnp.atleast_2d(b).T
-
     if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
-        result = solve_c128(
+        result = solve_c128.bind(
             Ai.astype(jnp.int32),
             Aj.astype(jnp.int32),
             Ax.astype(jnp.complex128),
             b.astype(jnp.complex128),
         )
     else:
-        result = solve_f64(
+        result = solve_f64.bind(
             Ai.astype(jnp.int32),
             Aj.astype(jnp.int32),
             Ax.astype(jnp.float64),
             b.astype(jnp.float64),
         )
+    return result
 
-    return result.reshape(*shape)
+
+def coo_mul_vec(Ai, Aj, Ax, b):
+    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
+        result = coo_mul_vec_c128.bind(
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            Ax.astype(jnp.complex128),
+            b.astype(jnp.complex128),
+        )
+    else:
+        result = coo_mul_vec_f64.bind(
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            Ax.astype(jnp.float64),
+            b.astype(jnp.float64),
+        )
+    return result
 
 
-def coo_mul_vec(Ai, Aj, Ax, x):
+# Implementations =====================================================================
+
+
+@solve_f64.def_impl
+def solve_f64_impl(Ai, Aj, Ax, b):
+    Ai, Aj, Ax, b, shape, n_lhs, n_nz, n_col, n_rhs = _prepare_arguments(Ai, Aj, Ax, b)
+    call = jax.extend.ffi.ffi_call(
+        "_solve_f64",
+        jax.ShapeDtypeStruct(b.shape, b.dtype),
+        vmap_method="broadcast_all",
+    )
+    result = call(  # type: ignore
+        Ai,
+        Aj,
+        Ax,
+        b,
+        n_col=np.int32(n_col),
+        n_rhs=np.int32(n_rhs),
+        n_lhs=np.int32(n_lhs),
+        n_nz=np.int32(n_nz),
+    )
+    return result.reshape(*shape)  # type: ignore
+
+
+@solve_c128.def_impl
+def solve_c128_impl(Ai, Aj, Ax, b):
+    Ai, Aj, Ax, b, shape, n_lhs, n_nz, n_col, n_rhs = _prepare_arguments(Ai, Aj, Ax, b)
+    _b = b.view(np.float64).reshape(n_lhs, n_col, n_rhs, 2)
+    call = jax.extend.ffi.ffi_call(
+        "_solve_c128",
+        jax.ShapeDtypeStruct(_b.shape, _b.dtype),
+        vmap_method="broadcast_all",
+    )
+    result = call(  # type: ignore
+        Ai,
+        Aj,
+        Ax.view(np.float64),
+        _b,
+        n_col=np.int32(n_col),
+        n_rhs=np.int32(n_rhs),
+        n_lhs=np.int32(n_lhs),
+        n_nz=np.int32(n_nz),
+    )
+    return result.view(np.complex128).reshape(*shape)  # type: ignore
+
+
+@coo_mul_vec_f64.def_impl
+def coo_mul_vec_f64_impl(Ai, Aj, Ax, x):
+    Ai, Aj, Ax, x, shape, n_lhs, n_nz, n_col, n_rhs = _prepare_arguments(Ai, Aj, Ax, x)
+    call = jax.extend.ffi.ffi_call(
+        "_coo_mul_vec_f64",
+        jax.ShapeDtypeStruct(x.shape, x.dtype),
+        vmap_method="broadcast_all",
+    )
+    result = call(  # type: ignore
+        Ai,
+        Aj,
+        Ax,
+        x,
+        n_col=np.int32(n_col),
+        n_rhs=np.int32(n_rhs),
+        n_lhs=np.int32(n_lhs),
+        n_nz=np.int32(n_nz),
+    )
+    return result.reshape(*shape)  # type: ignore
+
+
+@coo_mul_vec_c128.def_impl
+def coo_mul_vec_c128_impl(Ai, Aj, Ax, x):
+    Ai, Aj, Ax, x, shape, n_lhs, n_nz, n_col, n_rhs = _prepare_arguments(Ai, Aj, Ax, x)
+    _x = x.view(np.float64).reshape(n_lhs, n_col, n_rhs, 2)
+    call = jax.extend.ffi.ffi_call(
+        "_coo_mul_vec_c128",
+        jax.ShapeDtypeStruct(_x.shape, _x.dtype),
+        vmap_method="broadcast_all",
+    )
+    result = call(  # type: ignore
+        Ai,
+        Aj,
+        Ax.view(np.float64),
+        _x,
+        n_col=np.int32(n_col),
+        n_rhs=np.int32(n_rhs),
+        n_lhs=np.int32(n_lhs),
+        n_nz=np.int32(n_nz),
+    )
+    return result.view(np.complex128).reshape(*shape)  # type: ignore
+
+
+def _prepare_arguments(Ai, Aj, Ax, x):
     Ai = jnp.asarray(Ai)
     Aj = jnp.asarray(Aj)
     Ax = jnp.asarray(Ax)
@@ -134,130 +239,25 @@ def coo_mul_vec(Ai, Aj, Ax, x):
     if x.ndim < 2:
         x = jnp.atleast_2d(x).T
 
-    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, x)):
-        result = coo_mul_vec_c128(
-            Ai.astype(jnp.int32),
-            Aj.astype(jnp.int32),
-            Ax.astype(jnp.complex128),
-            x.astype(jnp.complex128),
-        )
-    else:
-        result = coo_mul_vec_f64(
-            Ai.astype(jnp.int32),
-            Aj.astype(jnp.int32),
-            Ax.astype(jnp.float64),
-            x.astype(jnp.float64),
-        )
-    return result.reshape(*shape)
+    n_col, n_rhs, *_ = x.shape[Ax.ndim - 1 :] + (1,)
+
+    *_, n_nz = Ax.shape
+    Ax = Ax.reshape(-1, n_nz)
+    n_lhs, _ = Ax.shape
+
+    x = x.reshape(-1, n_col, n_rhs)
+    return Ai, Aj, Ax, x, shape, n_lhs, n_nz, n_col, n_rhs
 
 
-def solve_f64(Ai, Aj, Ax, b):
-    *_, n_col, n_rhs = b.shape
-    _b = b.reshape(-1, n_col, n_rhs)
-
-    *ns_lhs, n_nz = Ax.shape
-    _Ax = Ax.reshape(-1, n_nz)
-    n_lhs, _ = _Ax.shape
-
-    call = jex.ffi.ffi_call(
-        "solve_f64",
-        jax.ShapeDtypeStruct(_b.shape, _b.dtype),
-        vmap_method="broadcast_all",
-    )
-    b = call(  # type: ignore
-        Ai,
-        Aj,
-        _Ax,
-        _b,
-        n_col=np.int32(n_col),
-        n_rhs=np.int32(n_rhs),
-        n_lhs=np.int32(n_lhs),
-        n_nz=np.int32(n_nz),
-    )
-    return b.reshape(*ns_lhs, n_col, n_rhs)  # type: ignore
+# Abstract Evaluations ================================================================
 
 
-def coo_mul_vec_f64(Ai, Aj, Ax, x):
-    *_, n_col, n_rhs = x.shape
-    _x = x.reshape(-1, n_col, n_rhs)
-
-    *ns_lhs, n_nz = Ax.shape
-    _Ax = Ax.reshape(-1, n_nz)
-    n_lhs, _ = _Ax.shape
-
-    call = jex.ffi.ffi_call(
-        "coo_mul_vec_f64",
-        jax.ShapeDtypeStruct(_x.shape, _x.dtype),
-        vmap_method="broadcast_all",
-    )
-    b = call(  # type: ignore
-        Ai,
-        Aj,
-        _Ax,
-        _x,
-        n_col=np.int32(n_col),
-        n_rhs=np.int32(n_rhs),
-        n_lhs=np.int32(n_lhs),
-        n_nz=np.int32(n_nz),
-    )
-    return b.reshape(*ns_lhs, n_col, n_rhs)  # type: ignore
-
-
-def solve_c128(Ai, Aj, Ax, b):
-    *_, n_col, n_rhs = b.shape
-    _b = b.reshape(-1, n_col, n_rhs)
-
-    *ns_lhs, n_nz = Ax.shape
-    _Ax = Ax.reshape(-1, n_nz)
-    n_lhs, _ = _Ax.shape
-
-    _Ax = _Ax.view(np.float64)
-    _b = _b.view(np.float64)
-
-    call = jex.ffi.ffi_call(
-        "solve_c128",
-        jax.ShapeDtypeStruct(_b.shape, _b.dtype),
-        vmap_method="broadcast_all",
-    )
-    x = call(  # type: ignore
-        Ai,
-        Aj,
-        _Ax,
-        _b,
-        n_col=np.int32(n_col),
-        n_rhs=np.int32(n_rhs),
-        n_lhs=np.int32(n_lhs),
-        n_nz=np.int32(n_nz),
-    )
-    return x.view(b.dtype).reshape(*ns_lhs, n_col, n_rhs)  # type: ignore
-
-
-def coo_mul_vec_c128(Ai, Aj, Ax, x):
-    *_, n_col, n_rhs = x.shape
-    _x = x.reshape(-1, n_col, n_rhs)
-
-    *ns_lhs, n_nz = Ax.shape
-    _Ax = Ax.reshape(-1, n_nz)
-    n_lhs, _ = _Ax.shape
-
-    _Ax = _Ax.view(np.float64)
-    _x = _x.view(np.float64)
-    call = jex.ffi.ffi_call(
-        "coo_mul_vec_c128",
-        jax.ShapeDtypeStruct(_x.shape, _x.dtype),
-        vmap_method="broadcast_all",
-    )
-    y = call(  # type: ignore
-        Ai,
-        Aj,
-        _Ax,
-        _x,
-        n_col=np.int32(n_col),
-        n_rhs=np.int32(n_rhs),
-        n_lhs=np.int32(n_lhs),
-        n_nz=np.int32(n_nz),
-    )
-    return y.view(x.dtype).reshape(*ns_lhs, n_col, n_rhs)  # type: ignore
+@solve_f64.def_abstract_eval
+@solve_c128.def_abstract_eval
+@coo_mul_vec_f64.def_abstract_eval
+@coo_mul_vec_c128.def_abstract_eval
+def coo_vec_operation_abstract_eval(Ai, Aj, Ax, b):
+    return ShapedArray(b.shape, b.dtype)
 
 
 # Forward Gradients ===================================================================
@@ -332,6 +332,7 @@ def coo_mul_vec_transpose(ct, Ai, Aj, Ax, b):
 @vmap_register(coo_mul_vec_c128, coo_mul_vec)
 def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
     aAi, aAj, aAx, ab = batch_axes
+    print(aAi, aAj, aAx, ab)
     Ai, Aj, Ax, b = vector_arg_values
 
     assert aAi is None, "Ai cannot be vectorized."
@@ -340,10 +341,11 @@ def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
     if aAx is not None and ab is not None:
         assert isinstance(aAx, int) and isinstance(ab, int)
         n_lhs = Ax.shape[aAx]
-        if ab != 0:
+        if aAx != 0:
             Ax = jnp.moveaxis(Ax, aAx, 0)
         if ab != 0:
             b = jnp.moveaxis(b, ab, 0)
+        print(Ai.shape, Aj.shape, Ax.shape, b.shape)
         result = operation(Ai, Aj, Ax, b)
         return result, 0
 
@@ -369,3 +371,56 @@ def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
 
     raise ValueError("invalid arguments for vmap")
 
+
+# Quick Tests =========================================================================
+
+
+if __name__ == "__main__":
+
+    n_nz = 8
+    n_col = 5
+    n_rhs = 1
+    n_lhs = 3  # only used in batched & vmap
+    dtype = np.complex128
+
+    ## SINGLE =========================================================================
+    # Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
+    # Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
+    # Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
+    # Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
+    # b = jax.random.normal(bkey, (n_col, n_rhs), dtype=dtype)
+    # x_sp = solve(Ai, Aj, Ax, b)
+    # print(x_sp.shape)
+
+    # A = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax)
+    # x = jsp.linalg.solve(A, b)
+    # print(x.shape)
+
+    # print(x_sp - x)
+
+    ## BATCHED ========================================================================
+    # Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
+    # Ax = jax.random.normal(Axkey, (n_lhs, n_nz), dtype=dtype)
+    # Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
+    # Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
+    # b = jax.random.normal(bkey, (n_lhs, n_col, n_rhs), dtype=dtype)
+    # x_sp = solve(Ai, Aj, Ax, b)
+
+    # A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
+    # x = jax.vmap(jsp.linalg.solve, (0, 0), 0)(A, b)
+
+    # print(x_sp - x)
+
+    ## VMAP ========================================================================
+
+    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
+    Ax = jax.random.normal(Axkey, (n_lhs, n_nz), dtype=dtype).T
+    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
+    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
+    b = jax.random.normal(bkey, (n_col, n_rhs, n_lhs), dtype=dtype)
+    x_sp = jax.vmap(jax.jit(solve), (None, None, 1, 2), 0)(Ai, Aj, Ax, b)
+
+    A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax.T)
+    x = jax.vmap(jsp.linalg.solve, (0, 0), 0)(A, b.transpose(2, 0, 1))
+
+    print(x_sp - x)
