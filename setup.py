@@ -5,33 +5,34 @@ import site
 import sys
 from glob import glob
 
+import pybind11
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
-python = f"python{sys.version_info.major}.{sys.version_info.minor}"
-site_packages = os.path.abspath(os.path.expanduser(site.getsitepackages()[0]))
-env = os.path.dirname(os.path.dirname(os.path.dirname(site_packages)))
-libroot = os.path.dirname(os.path.dirname(os.__file__))
+CWD = os.path.dirname(os.path.abspath(__file__))
 
-os_name = os.name
-if sys.platform == "darwin":
-    os_name = "darwin"
+match sys.platform:
+    case "darwin":
+        extra_compile_args = ["-std=c++11"]
+    case _:
+        extra_compile_args = []
 
-pybind11_include = {
-    "nt": "pybind11/include",
-    "darwin": "pybind11/include",
-    "posix": "pybind11/include",
-}
-extra_compile_args = {
-    "nt": [],
-    "darwin": ["-std=c++11"],  #
-    "posix": [],
-}
-extra_link_args = {
-    "nt": [],
-    "darwin": [],  # "-static-libgcc", "-static-libstdc++"
-    "posix": ["-static-libgcc", "-static-libstdc++"],
-}
+match sys.platform:
+    case "linux":
+        extra_link_args = ["-static-libgcc", "-static-libstdc++"]
+    case _:
+        extra_link_args = []
+
+
+include_dirs = [
+    os.path.join(CWD, "xla"),
+    os.path.join(os.path.dirname(pybind11.__file__), "include"),
+    os.path.join(CWD, "suitesparse/SuiteSparse_config"),
+    os.path.join(CWD, "suitesparse/AMD/Include"),
+    os.path.join(CWD, "suitesparse/COLAMD/Include"),
+    os.path.join(CWD, "suitesparse/BTF/Include"),
+    os.path.join(CWD, "suitesparse/KLU/Include"),
+]
 
 sources = [
     "suitesparse/SuiteSparse_config/SuiteSparse_config.c",
@@ -42,58 +43,15 @@ sources = [
 ]
 
 
-include_dirs = [
-    libroot,
-    pybind11_include[os_name],
-    "suitesparse/SuiteSparse_config",
-    "suitesparse/AMD/Include",
-    "suitesparse/COLAMD/Include",
-    "suitesparse/BTF/Include",
-    "suitesparse/KLU/Include",
-]
-
-library_dirs = [site_packages]
-
-suitesparse_headers = [
-    *glob("suitesparse/SuiteSparse_config/*.h"),
-    *glob("suitesparse/AMD/Include/*.h"),
-    *glob("suitesparse/COLAMD/Include/*.h"),
-    *glob("suitesparse/BTF/Include/*.h"),
-    *glob("suitesparse/KLU/Include/*.h"),
-]
-
-if os_name == "darwin":
-    klujax_cpp = Extension(
-        name="klujax_cpp",
-        sources=["klujax.cpp"],
-        include_dirs=include_dirs,
-        library_dirs=library_dirs,
-        extra_compile_args=extra_compile_args[os_name],
-        extra_link_args=extra_link_args[os_name],
-        language="c++",
-    )
-
-    sparse_c = Extension(
-        name="sparse_c",
-        sources=sources,
-        include_dirs=include_dirs,
-        library_dirs=library_dirs,
-        extra_compile_args=[],
-        extra_link_args=extra_link_args[os_name],
-        language="c",
-    )
-    exts = [sparse_c, klujax_cpp]
-else:
-    klujax_cpp = Extension(
-        name="klujax_cpp",
-        sources=sources + ["klujax.cpp"],
-        include_dirs=include_dirs,
-        library_dirs=library_dirs,
-        extra_compile_args=extra_compile_args[os_name],
-        extra_link_args=extra_link_args[os_name],
-        language="c++",
-    )
-    exts = [klujax_cpp]
+klujax_cpp = Extension(
+    name="klujax_cpp",
+    sources=["klujax.cpp", *sources],
+    include_dirs=include_dirs,
+    library_dirs=site.getsitepackages(),
+    extra_compile_args=extra_compile_args,
+    extra_link_args=extra_link_args,
+    language="c++",
+)
 
 
 setup(
@@ -106,10 +64,10 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/flaport/klujax",
     py_modules=["klujax"],
-    ext_modules=exts,
+    ext_modules=[klujax_cpp],
     cmdclass={"build_ext": build_ext},  # type: ignore
     install_requires=["jax<0.4.35", "jaxlib<0.4.35", "pybind11"],
-    python_requires=">=3.8",
+    python_requires=">=3.10",
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Programming Language :: Python :: 3",
