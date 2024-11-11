@@ -16,8 +16,9 @@ import jax.numpy as jnp
 import jax.scipy as jsp
 import numpy as np
 from jax import core, lax
+from jax._src.lib.mlir.dialects import hlo
 from jax.core import ShapedArray
-from jax.interpreters import ad, batching
+from jax.interpreters import ad, batching, mlir
 
 import klujax_cpp
 
@@ -249,6 +250,29 @@ def _prepare_arguments(Ai, Aj, Ax, x):
     return Ai, Aj, Ax, x, shape, n_lhs, n_nz, n_col, n_rhs
 
 
+# # Lowerings ===========================================================================
+#
+#
+# def solve_f64_lowering(ctx, Ai, Aj, Ax, b):
+#     result_avals = ctx.avals_out if ctx.avals_out is not None else ()
+#     result_types = list(
+#         mlir.flatten_ir_types([mlir.aval_to_ir_type(aval) for aval in result_avals])
+#     )
+#     custom_call = hlo.CustomCallOp(
+#         result_types,
+#         operands,
+#         call_target_name=ir.StringAttr.get("tf.call_tf_function"),
+#         has_side_effect=False,,
+#         api_version=1,
+#         called_computations=ir.ArrayAttr.get([]),
+#         backend_config=ir.StringAttr.get(""),
+#     )
+#
+#     print(ctx)
+#
+#
+# mlir.register_lowering(solve_f64, solve_f64_lowering, "cpu")
+
 # Abstract Evaluations ================================================================
 
 
@@ -376,27 +400,26 @@ def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
 
 
 if __name__ == "__main__":
-
     n_nz = 8
     n_col = 5
     n_rhs = 1
     n_lhs = 3  # only used in batched & vmap
-    dtype = np.complex128
+    dtype = np.float64
 
     ## SINGLE =========================================================================
-    # Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    # Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
-    # Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-    # Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    # b = jax.random.normal(bkey, (n_col, n_rhs), dtype=dtype)
-    # x_sp = solve(Ai, Aj, Ax, b)
-    # print(x_sp.shape)
+    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
+    Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
+    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
+    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
+    b = jax.random.normal(bkey, (n_col, n_rhs), dtype=dtype)
+    x_sp = jax.jit(solve)(Ai, Aj, Ax, b)
+    print(x_sp.shape)
 
-    # A = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax)
-    # x = jsp.linalg.solve(A, b)
-    # print(x.shape)
+    A = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax)
+    x = jsp.linalg.solve(A, b)
+    print(x.shape)
 
-    # print(x_sp - x)
+    print(x_sp - x)
 
     ## BATCHED ========================================================================
     # Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
@@ -413,14 +436,14 @@ if __name__ == "__main__":
 
     ## VMAP ========================================================================
 
-    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    Ax = jax.random.normal(Axkey, (n_lhs, n_nz), dtype=dtype).T
-    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    b = jax.random.normal(bkey, (n_col, n_rhs, n_lhs), dtype=dtype)
-    x_sp = jax.vmap(jax.jit(solve), (None, None, 1, 2), 0)(Ai, Aj, Ax, b)
+    # Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
+    # Ax = jax.random.normal(Axkey, (n_lhs, n_nz), dtype=dtype).T
+    # Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
+    # Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
+    # b = jax.random.normal(bkey, (n_col, n_rhs, n_lhs), dtype=dtype)
+    # x_sp = jax.vmap(solve, (None, None, 1, 2), 0)(Ai, Aj, Ax, b)
 
-    A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax.T)
-    x = jax.vmap(jsp.linalg.solve, (0, 0), 0)(A, b.transpose(2, 0, 1))
+    # A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax.T)
+    # x = jax.vmap(jsp.linalg.solve, (0, 0), 0)(A, b.transpose(2, 0, 1))
 
-    print(x_sp - x)
+    # print(x_sp - x)
