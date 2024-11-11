@@ -24,15 +24,16 @@ import klujax_cpp
 
 # Config ==============================================================================
 
-VERBOSE = True
+DEBUG = False
 jax.config.update("jax_enable_x64", True)
 jax.config.update("jax_platform_name", "cpu")
 
-_log = lambda s: None if not VERBOSE else print(s, file=sys.stderr)
+_log = lambda s: None if not DEBUG else print(s, file=sys.stderr)
 
 # The main functions ==================================================================
 
 
+@jax.jit
 def solve(Ai, Aj, Ax, b) -> jnp.ndarray:
     if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
         result = solve_c128.bind(
@@ -51,6 +52,7 @@ def solve(Ai, Aj, Ax, b) -> jnp.ndarray:
     return result  # type: ignore
 
 
+@jax.jit
 def coo_mul_vec(Ai, Aj, Ax, b) -> jnp.ndarray:
     if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
         result = coo_mul_vec_c128.bind(
@@ -251,27 +253,49 @@ def _prepare_arguments(Ai, Aj, Ax, x):
     if x.ndim == 0:
         x = x[None, None, None]
         x_n_lhs, n_col, n_rhs = x.shape
+        x_has_lhs = False
     elif x.ndim == 1:
         x = x[None, :, None]
         x_n_lhs, n_col, n_rhs = x.shape
+        x_has_lhs = False
     elif x.ndim == 2 and prefer_x_rhs_over_lhs:
         x = x[None, :, :]
         x_n_lhs, n_col, n_rhs = x.shape
+        x_has_lhs = False
     elif x.ndim == 2 and not prefer_x_rhs_over_lhs:
         x = x[:, :, None]
         x_n_lhs, n_col, n_rhs = x.shape
+        x_has_lhs = True
     elif x.ndim == 3:
         x_n_lhs, n_col, n_rhs = x.shape
+        x_has_lhs = True
     else:
         raise ValueError(
-            f"x should be at most 2D with shape: (n_lhs, n_col, n_rhs). Got: {x.shape}. "
+            f"x should be at most 3D with shape: (n_lhs, n_col, n_rhs). Got: {x.shape}. "
             "Note: jax.vmap is supported. Use it if needed."
         )
     _log(f"{x.shape=}")
     _log(f"{n_col=}")
     _log(f"{n_rhs=}")
 
-    n_lhs = max(a_n_lhs, x_n_lhs)
+    if a_n_lhs > x_n_lhs:
+        if not x_n_lhs == 1:
+            raise ValueError(
+                f"Cannot broadcast n_lhs for x into n_lhs for Ax. "
+                f"Got: n_lhs[x]={x_n_lhs}; n_lhs[Ax]={a_n_lhs}."
+            )
+        n_lhs = a_n_lhs
+        if x_has_lhs:
+            shape = (n_lhs,) + shape[1:]
+        else:
+            shape = (n_lhs,) + shape
+    else:
+        if not a_n_lhs == 1:
+            raise ValueError(
+                f"Cannot broadcast n_lhs for Ax into n_lhs for x. "
+                f"Got: n_lhs[x]={x_n_lhs}; n_lhs[Ax]={a_n_lhs}."
+            )
+        n_lhs = x_n_lhs
     _log(f"{n_lhs=}")
 
     Ax = jnp.broadcast_to(Ax, (n_lhs, n_nz))
@@ -660,8 +684,5 @@ if __name__ == "__main__":
             ],
             dtype=jnp.complex128,
         )
-        print(f"{Ai.shape=}")
-        print(f"{Aj.shape=}")
-        print(f"{Ax.shape=}")
-        print(f"{b.shape=}")
-        solve_c128_impl(Ai, Aj, Ax, b)
+        x = solve(Ai, Aj, Ax, b)
+        print(x.shape)
