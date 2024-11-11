@@ -157,10 +157,6 @@ def solve_f64_impl(Ai, Aj, Ax, b):
         Aj,
         Ax,
         b,
-        n_col=np.int32(n_col),
-        n_rhs=np.int32(n_rhs),
-        n_lhs=np.int32(n_lhs),
-        n_nz=np.int32(n_nz),
     )
     return result.reshape(*shape)  # type: ignore
 
@@ -168,23 +164,18 @@ def solve_f64_impl(Ai, Aj, Ax, b):
 @solve_c128.def_impl
 def solve_c128_impl(Ai, Aj, Ax, b):
     Ai, Aj, Ax, b, shape, n_lhs, n_nz, n_col, n_rhs = _prepare_arguments(Ai, Aj, Ax, b)
-    _b = b.view(np.float64).reshape(n_lhs, n_col, n_rhs, 2)
     call = jax.extend.ffi.ffi_call(
         "_solve_c128",
-        jax.ShapeDtypeStruct(_b.shape, _b.dtype),
+        jax.ShapeDtypeStruct(b.shape, b.dtype),
         vmap_method="broadcast_all",
     )
     result = call(  # type: ignore
         Ai,
         Aj,
-        Ax.view(np.float64),
-        _b,
-        n_col=np.int32(n_col),
-        n_rhs=np.int32(n_rhs),
-        n_lhs=np.int32(n_lhs),
-        n_nz=np.int32(n_nz),
+        Ax,
+        b,
     )
-    return result.view(np.complex128).reshape(*shape)  # type: ignore
+    return result.reshape(*shape)  # type: ignore
 
 
 @coo_mul_vec_f64.def_impl
@@ -200,10 +191,6 @@ def coo_mul_vec_f64_impl(Ai, Aj, Ax, x):
         Aj,
         Ax,
         x,
-        n_col=np.int32(n_col),
-        n_rhs=np.int32(n_rhs),
-        n_lhs=np.int32(n_lhs),
-        n_nz=np.int32(n_nz),
     )
     return result.reshape(*shape)  # type: ignore
 
@@ -211,23 +198,18 @@ def coo_mul_vec_f64_impl(Ai, Aj, Ax, x):
 @coo_mul_vec_c128.def_impl
 def coo_mul_vec_c128_impl(Ai, Aj, Ax, x):
     Ai, Aj, Ax, x, shape, n_lhs, n_nz, n_col, n_rhs = _prepare_arguments(Ai, Aj, Ax, x)
-    _x = x.view(np.float64).reshape(n_lhs, n_col, n_rhs, 2)
     call = jax.extend.ffi.ffi_call(
         "_coo_mul_vec_c128",
-        jax.ShapeDtypeStruct(_x.shape, _x.dtype),
+        jax.ShapeDtypeStruct(x.shape, x.dtype),
         vmap_method="broadcast_all",
     )
     result = call(  # type: ignore
         Ai,
         Aj,
-        Ax.view(np.float64),
-        _x,
-        n_col=np.int32(n_col),
-        n_rhs=np.int32(n_rhs),
-        n_lhs=np.int32(n_lhs),
-        n_nz=np.int32(n_nz),
+        Ax,
+        x,
     )
-    return result.view(np.complex128).reshape(*shape)  # type: ignore
+    return result.reshape(*shape)  # type: ignore
 
 
 def _prepare_arguments(Ai, Aj, Ax, x):
@@ -356,7 +338,6 @@ def coo_mul_vec_transpose(ct, Ai, Aj, Ax, b):
 @vmap_register(coo_mul_vec_c128, coo_mul_vec)
 def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
     aAi, aAj, aAx, ab = batch_axes
-    print(aAi, aAj, aAx, ab)
     Ai, Aj, Ax, b = vector_arg_values
 
     assert aAi is None, "Ai cannot be vectorized."
@@ -369,7 +350,6 @@ def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
             Ax = jnp.moveaxis(Ax, aAx, 0)
         if ab != 0:
             b = jnp.moveaxis(b, ab, 0)
-        print(Ai.shape, Aj.shape, Ax.shape, b.shape)
         result = operation(Ai, Aj, Ax, b)
         return result, 0
 
@@ -412,12 +392,10 @@ if __name__ == "__main__":
     Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
     Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
     b = jax.random.normal(bkey, (n_col, n_rhs), dtype=dtype)
-    x_sp = jax.jit(solve)(Ai, Aj, Ax, b)
-    print(x_sp.shape)
+    x_sp = solve(Ai, Aj, Ax, b)
 
     A = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax)
     x = jsp.linalg.solve(A, b)
-    print(x.shape)
 
     print(x_sp - x)
 
