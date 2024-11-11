@@ -253,22 +253,22 @@ def _prepare_arguments(Ai, Aj, Ax, x):
     if x.ndim == 0:
         x = x[None, None, None]
         x_n_lhs, n_col, n_rhs = x.shape
-        x_has_lhs = False
+        shape_includes_lhs = False
     elif x.ndim == 1:
         x = x[None, :, None]
         x_n_lhs, n_col, n_rhs = x.shape
-        x_has_lhs = False
+        shape_includes_lhs = False
     elif x.ndim == 2 and prefer_x_rhs_over_lhs:
         x = x[None, :, :]
         x_n_lhs, n_col, n_rhs = x.shape
-        x_has_lhs = False
+        shape_includes_lhs = False
     elif x.ndim == 2 and not prefer_x_rhs_over_lhs:
         x = x[:, :, None]
         x_n_lhs, n_col, n_rhs = x.shape
-        x_has_lhs = True
+        shape_includes_lhs = True
     elif x.ndim == 3:
         x_n_lhs, n_col, n_rhs = x.shape
-        x_has_lhs = True
+        shape_includes_lhs = True
     else:
         raise ValueError(
             f"x should be at most 3D with shape: (n_lhs, n_col, n_rhs). Got: {x.shape}. "
@@ -278,14 +278,16 @@ def _prepare_arguments(Ai, Aj, Ax, x):
     _log(f"{n_col=}")
     _log(f"{n_rhs=}")
 
-    if a_n_lhs > x_n_lhs:
+    if a_n_lhs == x_n_lhs:
+        n_lhs = a_n_lhs
+    elif a_n_lhs > x_n_lhs:
         if not x_n_lhs == 1:
             raise ValueError(
                 f"Cannot broadcast n_lhs for x into n_lhs for Ax. "
                 f"Got: n_lhs[x]={x_n_lhs}; n_lhs[Ax]={a_n_lhs}."
             )
         n_lhs = a_n_lhs
-        if x_has_lhs:
+        if shape_includes_lhs:
             shape = (n_lhs,) + shape[1:]
         else:
             shape = (n_lhs,) + shape
@@ -343,10 +345,7 @@ def coo_vec_operation_abstract_eval(Ai, Aj, Ax, b):
 @ad_register(solve_c128)
 def solve_value_and_jvp(arg_values, arg_tangents):
     Ai, Aj, Ax, b = arg_values
-    print(Ax)
-    print(b)
     dAi, dAj, dAx, db = arg_tangents
-    print(dAi, dAj, dAx, db)
     dAx = dAx if not isinstance(dAx, ad.Zero) else lax.zeros_like_array(Ax)
     dAi = dAi if not isinstance(dAi, ad.Zero) else lax.zeros_like_array(Ai)
     dAj = dAj if not isinstance(dAj, ad.Zero) else lax.zeros_like_array(Aj)
@@ -439,7 +438,6 @@ def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
         assert isinstance(ab, int)
         if ab != 0:
             b = jnp.moveaxis(b, ab, 0)
-        print(b.shape)
         n_lhs, n_col, *n_rhs_list = b.shape
         n_rhs = np.prod(np.array(n_rhs_list, dtype=np.int32))
         b = b.reshape(n_lhs, n_col, n_rhs).transpose((1, 0, 2)).reshape(n_col, -1)[None]
@@ -599,90 +597,13 @@ if __name__ == "__main__":
 
         _grad = jax.grad(_loss, argnums=[0, 1])
 
-        print(_grad(Ax, b))
-
     ## Sax snippet ====================================================================
     if True:
-        Ai = jnp.array(
-            [6, 4, 6, 4, 2, 11, 1, 8, 7, 7, 5, 5, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
-            dtype=jnp.int32,
-        )
-        Aj = jnp.array(
-            [
-                0,
-                0,
-                3,
-                3,
-                5,
-                4,
-                7,
-                6,
-                9,
-                10,
-                9,
-                10,
-                0,
-                1,
-                2,
-                3,
-                4,
-                5,
-                6,
-                7,
-                8,
-                9,
-                10,
-                11,
-            ],
-            dtype=jnp.int32,
-        )
-        Ax = jnp.array(
-            [
-                [
-                    -0.70710678 - 0.0j,
-                    -0.0 - 0.70710678j,
-                    -0.0 - 0.70710678j,
-                    -0.70710678 - 0.0j,
-                    -0.82076344 - 0.57126822j,
-                    -0.82076344 - 0.57126822j,
-                    -0.82076344 - 0.57126822j,
-                    -0.82076344 - 0.57126822j,
-                    -0.70710678 - 0.0j,
-                    -0.0 - 0.70710678j,
-                    -0.0 - 0.70710678j,
-                    -0.70710678 - 0.0j,
-                    1.0 + 0.0j,
-                    1.0 + 0.0j,
-                    1.0 + 0.0j,
-                    1.0 + 0.0j,
-                    1.0 + 0.0j,
-                    1.0 + 0.0j,
-                    1.0 + 0.0j,
-                    1.0 + 0.0j,
-                    1.0 + 0.0j,
-                    1.0 + 0.0j,
-                    1.0 + 0.0j,
-                    1.0 + 0.0j,
-                ]
-            ],
-            dtype=jnp.complex128,
-        )
-        b = jnp.array(
-            [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 0.0, 0.0, 0.0],
-                [0.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 0.0, 0.0],
-                [0.0, 0.0, 0.0, 0.0],
-                [0.0, 0.0, 0.0, 0.0],
-                [0.0, 0.0, 0.0, 0.0],
-                [0.0, 0.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-                [0.0, 0.0, 0.0, 0.0],
-            ],
-            dtype=jnp.complex128,
-        )
+        Ai = jnp.array([6, 4, 6, 4, 2, 11, 1, 8, 7, 7, 5, 5, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], dtype=jnp.int32)  # fmt: skip
+        Aj = jnp.array([ 0, 0, 3, 3, 5, 4, 7, 6, 9, 10, 9, 10, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, ], dtype=jnp.int32)  # fmt: skip
+        Ax = jnp.array([-0.70710678 - 0.0j, -0.0 - 0.70710678j, -0.0 - 0.70710678j, -0.70710678 - 0.0j, -0.82076344 - 0.57126822j, -0.82076344 - 0.57126822j, -0.82076344 - 0.57126822j, -0.82076344 - 0.57126822j, -0.70710678 - 0.0j, -0.0 - 0.70710678j, -0.0 - 0.70710678j, -0.70710678 - 0.0j, 1.0 + 0.0j, 1.0 + 0.0j, 1.0 + 0.0j, 1.0 + 0.0j, 1.0 + 0.0j, 1.0 + 0.0j, 1.0 + 0.0j, 1.0 + 0.0j, 1.0 + 0.0j, 1.0 + 0.0j, 1.0 + 0.0j, 1.0 + 0.0j], dtype=jnp.complex128)  # fmt: skip
+        b = jnp.array([[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 0.0]], dtype=jnp.complex128)  # fmt: skip
+        ref = jnp.array([[1.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j], [ 0.0 + 0.0j, 0.0 + 0.0j, 0.58036739 + 0.40394763j, -0.40394763 + 0.58036739j, ], [ 0.0 + 0.0j, 0.0 + 0.0j, -0.40394763 + 0.58036739j, 0.58036739 + 0.40394763j, ], [0.0 + 0.0j, 1.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j], [0.0 + 0.70710678j, 0.70710678 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j], [0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.70710678j, 0.70710678 + 0.0j], [0.70710678 + 0.0j, 0.0 + 0.70710678j, 0.0 + 0.0j, 0.0 + 0.0j], [0.0 + 0.0j, 0.0 + 0.0j, 0.70710678 + 0.0j, 0.0 + 0.70710678j], [ 0.58036739 + 0.40394763j, -0.40394763 + 0.58036739j, 0.0 + 0.0j, 0.0 + 0.0j, ], [0.0 + 0.0j, 0.0 + 0.0j, 1.0 + 0.0j, 0.0 + 0.0j], [0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 1.0 + 0.0j], [ -0.40394763 + 0.58036739j, 0.58036739 + 0.40394763j, 0.0 + 0.0j, 0.0 + 0.0j]], dtype=jnp.complex128)  # fmt: skip
         x = solve(Ai, Aj, Ax, b)
-        print(x.shape)
+        print(np.int32(np.abs(x) > 0))
+        print((jnp.abs(x - ref) < 1e-7).all())
