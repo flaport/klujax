@@ -125,10 +125,10 @@ _coo_mul_vec_f64(ffi::Buffer<ffi::DataType::S32> buf_Ai,
   double *Ax = buf_Ax.typed_data();
   double *x = buf_x.typed_data();
   double *b = buf_b->typed_data();
-  int n_col = (int)buf_b->dimensions()[1];
   int n_lhs = (int)buf_Ax.dimensions()[0];
-  int n_rhs = (int)buf_b->dimensions()[2];
   int n_nz = (int)buf_Ax.dimensions()[1];
+  int n_rhs = (int)buf_b->dimensions()[1];
+  int n_col = (int)buf_b->dimensions()[2];
 
   // initialize empty result
   for (int i = 0; i < n_lhs * n_col * n_rhs; i++) {
@@ -162,7 +162,6 @@ ffi::Error _solve_c128(ffi::Buffer<ffi::DataType::S32> buf_Ai,
   double *x = (double *)buf_x->typed_data();
   int n_lhs = (int)buf_Ax.dimensions()[0];
   int n_nz = (int)buf_Ax.dimensions()[1];
-
   int n_rhs = (int)buf_x->dimensions()[1];
   int n_col = (int)buf_x->dimensions()[2];
 
@@ -226,10 +225,10 @@ _coo_mul_vec_c128(ffi::Buffer<ffi::DataType::S32> buf_Ai,
   double *Ax = (double *)buf_Ax.typed_data();
   double *x = (double *)buf_x.typed_data();
   double *b = (double *)buf_b->typed_data();
-  int n_col = (int)buf_b->dimensions()[1];
   int n_lhs = (int)buf_Ax.dimensions()[0];
-  int n_rhs = (int)buf_b->dimensions()[2];
   int n_nz = (int)buf_Ax.dimensions()[1];
+  int n_rhs = (int)buf_b->dimensions()[1];
+  int n_col = (int)buf_b->dimensions()[2];
 
   // initialize empty result
   for (int i = 0; i < 2 * n_lhs * n_col * n_rhs; i++) {

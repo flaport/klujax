@@ -16,7 +16,6 @@ import jax.numpy as jnp
 import jax.scipy as jsp
 import numpy as np
 from jax import core, lax
-from jax._src.lib.mlir.dialects import hlo
 from jax.core import ShapedArray
 from jax.interpreters import ad, batching, mlir
 
@@ -143,7 +142,6 @@ def vmap_register(primitive, operation):
 def solve_f64_impl(Ai, Aj, Ax, b) -> jnp.ndarray:
     Ai, Aj, Ax, b, shape = _prepare_arguments(Ai, Aj, Ax, b)
 
-    # TODO: make expected shape consistent with expected shape for coo_mul_vec.
     _b = b.transpose(0, 2, 1)
     call = jax.extend.ffi.ffi_call(
         "_solve_f64",
@@ -163,7 +161,6 @@ def solve_f64_impl(Ai, Aj, Ax, b) -> jnp.ndarray:
 def solve_c128_impl(Ai, Aj, Ax, b) -> jnp.ndarray:
     Ai, Aj, Ax, b, shape = _prepare_arguments(Ai, Aj, Ax, b)
 
-    # TODO: make expected shape consistent with expected shape for coo_mul_vec.
     _b = b.transpose(0, 2, 1)
     call = jax.extend.ffi.ffi_call(
         "_solve_c128",
@@ -182,35 +179,37 @@ def solve_c128_impl(Ai, Aj, Ax, b) -> jnp.ndarray:
 @coo_mul_vec_f64.def_impl
 def coo_mul_vec_f64_impl(Ai, Aj, Ax, x) -> jnp.ndarray:
     Ai, Aj, Ax, x, shape = _prepare_arguments(Ai, Aj, Ax, x)
+    _x = x.transpose(0, 2, 1)
     call = jax.extend.ffi.ffi_call(
         "_coo_mul_vec_f64",
-        jax.ShapeDtypeStruct(x.shape, x.dtype),
+        jax.ShapeDtypeStruct(_x.shape, _x.dtype),
         vmap_method="broadcast_all",
     )
     result = call(  # type: ignore
         Ai,
         Aj,
         Ax,
-        x,
+        _x,
     )
-    return result.reshape(*shape)  # type: ignore
+    return result.transpose(0, 2, 1).reshape(*shape)  # type: ignore
 
 
 @coo_mul_vec_c128.def_impl
 def coo_mul_vec_c128_impl(Ai, Aj, Ax, x) -> jnp.ndarray:
     Ai, Aj, Ax, x, shape = _prepare_arguments(Ai, Aj, Ax, x)
+    _x = x.transpose(0, 2, 1)
     call = jax.extend.ffi.ffi_call(
         "_coo_mul_vec_c128",
-        jax.ShapeDtypeStruct(x.shape, x.dtype),
+        jax.ShapeDtypeStruct(_x.shape, _x.dtype),
         vmap_method="broadcast_all",
     )
     result = call(  # type: ignore
         Ai,
         Aj,
         Ax,
-        x,
+        _x,
     )
-    return result.reshape(*shape)  # type: ignore
+    return result.transpose(0, 2, 1).reshape(*shape)  # type: ignore
 
 
 def _prepare_arguments(Ai, Aj, Ax, x):
@@ -407,11 +406,11 @@ if __name__ == "__main__":
     n_col = 5
     n_rhs = 1
     n_lhs = 3  # only used in batched & vmap
-    dtype = np.complex128
+    dtype = np.float64
 
     ## SINGLE =========================================================================
 
-    if True:
+    if False:
         print("single")
         Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
         Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
@@ -428,7 +427,7 @@ if __name__ == "__main__":
 
     ## BATCHED ========================================================================
 
-    if True:
+    if False:
         print("batched")
         Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
         Ax = jax.random.normal(Axkey, (n_lhs, n_nz), dtype=dtype)
@@ -445,7 +444,7 @@ if __name__ == "__main__":
 
     ## RHS ============================================================================
 
-    if True:
+    if False:
         print("rhs")
         Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
         Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
@@ -457,17 +456,32 @@ if __name__ == "__main__":
         x_sp1 = solve(Ai, Aj, Ax, b[None, :, 0:1])
         x_sp2 = solve(Ai, Aj, Ax, b[None, :, 1:2])
 
-        A = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax)
-        x = np.linalg.solve(A, b)
-
         print(b)
+        print(x_sp)
+        print(x_sp1)
+        print(x_sp2)
+
+    ## RHS 2 ==========================================================================
+
+    if False:
+        print("rhs")
+        Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
+        Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
+        Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
+        Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
+        b = jax.random.normal(bkey, (n_col, 2), dtype=dtype)
+
+        x_sp = coo_mul_vec(Ai, Aj, Ax, b)
+        x_sp1 = coo_mul_vec(Ai, Aj, Ax, b[:, 0])
+        x_sp2 = coo_mul_vec(Ai, Aj, Ax, b[:, 1])
+
         print(x_sp)
         print(x_sp1)
         print(x_sp2)
 
     ## VMAP A & b =====================================================================
 
-    if True:
+    if False:
         print("vmap A & b")
         Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
         Ax = jax.random.normal(Axkey, (n_lhs, n_nz), dtype=dtype).T
@@ -484,7 +498,7 @@ if __name__ == "__main__":
 
     ## VMAP A =========================================================================
 
-    if True:
+    if False:
         print("vmap A")
         Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
         Ax = jax.random.normal(Axkey, (n_lhs, n_nz), dtype=dtype)
@@ -503,7 +517,7 @@ if __name__ == "__main__":
 
     ## VMAP b =========================================================================
 
-    if True:
+    if False:
         print("vmap b")
         Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
         Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
@@ -517,3 +531,21 @@ if __name__ == "__main__":
         print(x_sp)
         print(x_sp2)
         print(((x_sp - x_sp2) < 1e-9).all())
+
+    ## Grads ==========================================================================
+
+    if True:
+        print("grads")
+        Axkey, Aikey, Ajkey, bkey, ykey = jax.random.split(jax.random.PRNGKey(33), 5)
+        Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
+        Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
+        Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
+        b = jax.random.normal(bkey, (n_col,), dtype=dtype)
+        y = jax.random.normal(bkey, (n_col,), dtype=dtype)
+
+        def _loss(Ax, b):
+            return jnp.sum(jnp.abs(solve(Ai, Aj, Ax, b) - y) ** 2)
+
+        _grad = jax.grad(_loss, argnums=[0, 1])
+
+        print(_grad(Ax, b))
