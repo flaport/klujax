@@ -1,12 +1,12 @@
 """ klujax: a KLU solver for JAX """
 
+# Metadata ============================================================================
+
 __version__ = "0.2.10"
 __author__ = "Floris Laporte"
 __all__ = ["solve", "coo_mul_vec"]
 
-
 # Imports =============================================================================
-
 
 from functools import partial
 
@@ -24,13 +24,49 @@ import klujax_cpp
 
 # Config ==============================================================================
 
-
 jax.config.update("jax_enable_x64", True)
 jax.config.update("jax_platform_name", "cpu")
 
+# The main functions ==================================================================
+
+
+def solve(Ai, Aj, Ax, b) -> jnp.ndarray:
+    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
+        result = solve_c128.bind(
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            Ax.astype(jnp.complex128),
+            b.astype(jnp.complex128),
+        )
+    else:
+        result = solve_f64.bind(
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            Ax.astype(jnp.float64),
+            b.astype(jnp.float64),
+        )
+    return result  # type: ignore
+
+
+def coo_mul_vec(Ai, Aj, Ax, b) -> jnp.ndarray:
+    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
+        result = coo_mul_vec_c128.bind(
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            Ax.astype(jnp.complex128),
+            b.astype(jnp.complex128),
+        )
+    else:
+        result = coo_mul_vec_f64.bind(
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            Ax.astype(jnp.float64),
+            b.astype(jnp.float64),
+        )
+    return result  # type: ignore
+
 
 # Constants ===========================================================================
-
 
 COMPLEX_DTYPES = (
     np.complex64,
@@ -40,16 +76,14 @@ COMPLEX_DTYPES = (
     jnp.complex128,
 )
 
-
 # Primitives ==========================================================================
-
 
 solve_f64 = core.Primitive("solve_f64")
 solve_c128 = core.Primitive("solve_c128")
 coo_mul_vec_f64 = core.Primitive("coo_mul_vec_f64")
 coo_mul_vec_c128 = core.Primitive("coo_mul_vec_c128")
 
-# Register XLA Extensions ==============================================================
+# Register XLA extensions ==============================================================
 
 jax.extend.ffi.register_ffi_target(
     "_solve_f64",
@@ -102,50 +136,11 @@ def vmap_register(primitive, operation):
     return decorator
 
 
-# The Functions =======================================================================
-
-
-def solve(Ai, Aj, Ax, b):
-    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
-        result = solve_c128.bind(
-            Ai.astype(jnp.int32),
-            Aj.astype(jnp.int32),
-            Ax.astype(jnp.complex128),
-            b.astype(jnp.complex128),
-        )
-    else:
-        result = solve_f64.bind(
-            Ai.astype(jnp.int32),
-            Aj.astype(jnp.int32),
-            Ax.astype(jnp.float64),
-            b.astype(jnp.float64),
-        )
-    return result
-
-
-def coo_mul_vec(Ai, Aj, Ax, b):
-    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
-        result = coo_mul_vec_c128.bind(
-            Ai.astype(jnp.int32),
-            Aj.astype(jnp.int32),
-            Ax.astype(jnp.complex128),
-            b.astype(jnp.complex128),
-        )
-    else:
-        result = coo_mul_vec_f64.bind(
-            Ai.astype(jnp.int32),
-            Aj.astype(jnp.int32),
-            Ax.astype(jnp.float64),
-            b.astype(jnp.float64),
-        )
-    return result
-
-
 # Implementations =====================================================================
 
 
 @solve_f64.def_impl
-def solve_f64_impl(Ai, Aj, Ax, b):
+def solve_f64_impl(Ai, Aj, Ax, b) -> jnp.ndarray:
     Ai, Aj, Ax, b, shape = _prepare_arguments(Ai, Aj, Ax, b)
 
     # TODO: make expected shape consistent with expected shape for coo_mul_vec.
@@ -165,7 +160,7 @@ def solve_f64_impl(Ai, Aj, Ax, b):
 
 
 @solve_c128.def_impl
-def solve_c128_impl(Ai, Aj, Ax, b):
+def solve_c128_impl(Ai, Aj, Ax, b) -> jnp.ndarray:
     Ai, Aj, Ax, b, shape = _prepare_arguments(Ai, Aj, Ax, b)
 
     # TODO: make expected shape consistent with expected shape for coo_mul_vec.
@@ -185,7 +180,7 @@ def solve_c128_impl(Ai, Aj, Ax, b):
 
 
 @coo_mul_vec_f64.def_impl
-def coo_mul_vec_f64_impl(Ai, Aj, Ax, x):
+def coo_mul_vec_f64_impl(Ai, Aj, Ax, x) -> jnp.ndarray:
     Ai, Aj, Ax, x, shape = _prepare_arguments(Ai, Aj, Ax, x)
     call = jax.extend.ffi.ffi_call(
         "_coo_mul_vec_f64",
@@ -202,7 +197,7 @@ def coo_mul_vec_f64_impl(Ai, Aj, Ax, x):
 
 
 @coo_mul_vec_c128.def_impl
-def coo_mul_vec_c128_impl(Ai, Aj, Ax, x):
+def coo_mul_vec_c128_impl(Ai, Aj, Ax, x) -> jnp.ndarray:
     Ai, Aj, Ax, x, shape = _prepare_arguments(Ai, Aj, Ax, x)
     call = jax.extend.ffi.ffi_call(
         "_coo_mul_vec_c128",
@@ -222,37 +217,52 @@ def _prepare_arguments(Ai, Aj, Ax, x):
     Ai = jnp.asarray(Ai)
     Aj = jnp.asarray(Aj)
     Ax = jnp.asarray(Ax)
-
     x = jnp.asarray(x)
     shape = x.shape
 
-    if x.ndim < 2:
-        x = jnp.atleast_2d(x).T
+    prefer_x_rhs_over_lhs = (Ax.ndim < 2) or (Ax.shape[0] != x.shape[0])
 
-    if Ax.ndim < 2:
+    if Ax.ndim > 2:
+        raise ValueError(
+            f"Ax should be at most 2D with shape: (n_lhs, n_nz). Got: {Ax.shape}. "
+            "Note: jax.vmap is supported. Use it if needed."
+        )
+    else:
         Ax = jnp.atleast_2d(Ax)
 
-    n_col, n_rhs, *_ = x.shape[Ax.ndim - 1 :] + (1,)
-
-    *_, n_nz = Ax.shape
+    a_n_lhs, n_nz = Ax.shape
     Ax = Ax.reshape(-1, n_nz)
-    x = x.reshape(-1, n_col, n_rhs)
-    n_lhs = max(Ax.shape[0], x.shape[0])
+
+    if x.ndim == 0:
+        x = x[None, None, None]
+        x_n_lhs, n_col, n_rhs = x.shape
+    elif x.ndim == 1:
+        x = x[None, :, None]
+        x_n_lhs, n_col, n_rhs = x.shape
+    elif x.ndim == 2 and prefer_x_rhs_over_lhs:
+        x = x[None, :, :]
+        x_n_lhs, n_col, n_rhs = x.shape
+    elif x.ndim == 2 and not prefer_x_rhs_over_lhs:
+        x = x[:, :, None]
+        x_n_lhs, n_col, n_rhs = x.shape
+    elif x.ndim == 3:
+        x_n_lhs, n_col, n_rhs = x.shape
+    else:
+        raise ValueError(
+            f"x should be at most 2D with shape: (n_lhs, n_col, n_rhs). Got: {x.shape}. "
+            "Note: jax.vmap is supported. Use it if needed."
+        )
+
+    n_lhs = max(a_n_lhs, x_n_lhs)
     Ax = jnp.broadcast_to(Ax, (n_lhs, n_nz))
     x = jnp.broadcast_to(x, (n_lhs, n_col, n_rhs))
 
-    print(f"{Ax.shape=}")
-    print(f"{x.shape=}")
-    print(f"{n_lhs=}")
-    print(f"{n_nz=}")
-    print(f"{n_col=}")
-    print(f"{n_rhs=}")
-
+    # We retain the old shape of b so the result of the primitive can be
+    # reshaped to the expected shape.
     return Ai, Aj, Ax, x, shape
 
 
 # Lowerings ===========================================================================
-
 
 solve_f64_lowering = mlir.lower_fun(solve_f64_impl, multiple_results=False)
 mlir.register_lowering(solve_f64, solve_f64_lowering)
@@ -267,7 +277,6 @@ coo_mul_vec_c128_lowering = mlir.lower_fun(
     coo_mul_vec_c128_impl, multiple_results=False
 )
 mlir.register_lowering(coo_mul_vec_c128, coo_mul_vec_c128_lowering)
-
 
 # Abstract Evaluations ================================================================
 
@@ -393,7 +402,6 @@ def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
 
 # Quick Tests =========================================================================
 
-
 if __name__ == "__main__":
     n_nz = 8
     n_col = 5
@@ -402,7 +410,8 @@ if __name__ == "__main__":
     dtype = np.complex128
 
     ## SINGLE =========================================================================
-    if False:
+
+    if True:
         print("single")
         Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
         Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
@@ -418,7 +427,8 @@ if __name__ == "__main__":
         print(((x_sp - x) < 1e-9).all())
 
     ## BATCHED ========================================================================
-    if False:
+
+    if True:
         print("batched")
         Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
         Ax = jax.random.normal(Axkey, (n_lhs, n_nz), dtype=dtype)
@@ -434,7 +444,8 @@ if __name__ == "__main__":
         print(((x_sp - x) < 1e-9).all())
 
     ## RHS ============================================================================
-    if False:
+
+    if True:
         print("rhs")
         Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
         Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
@@ -455,7 +466,8 @@ if __name__ == "__main__":
         print(x_sp2)
 
     ## VMAP A & b =====================================================================
-    if False:
+
+    if True:
         print("vmap A & b")
         Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
         Ax = jax.random.normal(Axkey, (n_lhs, n_nz), dtype=dtype).T
@@ -471,7 +483,8 @@ if __name__ == "__main__":
         print(((x_sp - x) < 1e-9).all())
 
     ## VMAP A =========================================================================
-    if False:
+
+    if True:
         print("vmap A")
         Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
         Ax = jax.random.normal(Axkey, (n_lhs, n_nz), dtype=dtype)
@@ -487,3 +500,20 @@ if __name__ == "__main__":
 
         print(x_sp - x)
         print(((x_sp - x) < 1e-9).all())
+
+    ## VMAP b =========================================================================
+
+    if True:
+        print("vmap b")
+        Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
+        Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
+        Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
+        Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
+        b = jax.random.normal(bkey, (n_col, 2), dtype=dtype)
+
+        x_sp = jax.vmap(solve, (None, None, None, 1), 1)(Ai, Aj, Ax, b)
+        x_sp2 = jnp.stack([solve(Ai, Aj, Ax, b[:, i]) for i in range(2)], axis=1)
+
+        print(x_sp)
+        print(x_sp2)
+        print(((x_sp - x_sp2) < 1e-9).all())
