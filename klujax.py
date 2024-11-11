@@ -146,41 +146,47 @@ def coo_mul_vec(Ai, Aj, Ax, b):
 
 @solve_f64.def_impl
 def solve_f64_impl(Ai, Aj, Ax, b):
-    Ai, Aj, Ax, b, shape, n_lhs, n_nz, n_col, n_rhs = _prepare_arguments(Ai, Aj, Ax, b)
+    Ai, Aj, Ax, b, shape = _prepare_arguments(Ai, Aj, Ax, b)
+
+    # TODO: make expected shape consistent with expected shape for coo_mul_vec.
+    _b = b.transpose(0, 2, 1)
     call = jax.extend.ffi.ffi_call(
         "_solve_f64",
-        jax.ShapeDtypeStruct(b.shape, b.dtype),
+        jax.ShapeDtypeStruct(_b.shape, _b.dtype),
         vmap_method="broadcast_all",
     )
     result = call(  # type: ignore
         Ai,
         Aj,
         Ax,
-        b,
+        _b,
     )
-    return result.reshape(*shape)  # type: ignore
+    return result.transpose(0, 2, 1).reshape(*shape)  # type: ignore
 
 
 @solve_c128.def_impl
 def solve_c128_impl(Ai, Aj, Ax, b):
-    Ai, Aj, Ax, b, shape, n_lhs, n_nz, n_col, n_rhs = _prepare_arguments(Ai, Aj, Ax, b)
+    Ai, Aj, Ax, b, shape = _prepare_arguments(Ai, Aj, Ax, b)
+
+    # TODO: make expected shape consistent with expected shape for coo_mul_vec.
+    _b = b.transpose(0, 2, 1)
     call = jax.extend.ffi.ffi_call(
         "_solve_c128",
-        jax.ShapeDtypeStruct(b.shape, b.dtype),
+        jax.ShapeDtypeStruct(_b.shape, _b.dtype),
         vmap_method="broadcast_all",
     )
     result = call(  # type: ignore
         Ai,
         Aj,
         Ax,
-        b,
+        _b,
     )
-    return result.reshape(*shape)  # type: ignore
+    return result.transpose(0, 2, 1).reshape(*shape)  # type: ignore
 
 
 @coo_mul_vec_f64.def_impl
 def coo_mul_vec_f64_impl(Ai, Aj, Ax, x):
-    Ai, Aj, Ax, x, shape, n_lhs, n_nz, n_col, n_rhs = _prepare_arguments(Ai, Aj, Ax, x)
+    Ai, Aj, Ax, x, shape = _prepare_arguments(Ai, Aj, Ax, x)
     call = jax.extend.ffi.ffi_call(
         "_coo_mul_vec_f64",
         jax.ShapeDtypeStruct(x.shape, x.dtype),
@@ -197,7 +203,7 @@ def coo_mul_vec_f64_impl(Ai, Aj, Ax, x):
 
 @coo_mul_vec_c128.def_impl
 def coo_mul_vec_c128_impl(Ai, Aj, Ax, x):
-    Ai, Aj, Ax, x, shape, n_lhs, n_nz, n_col, n_rhs = _prepare_arguments(Ai, Aj, Ax, x)
+    Ai, Aj, Ax, x, shape = _prepare_arguments(Ai, Aj, Ax, x)
     call = jax.extend.ffi.ffi_call(
         "_coo_mul_vec_c128",
         jax.ShapeDtypeStruct(x.shape, x.dtype),
@@ -216,44 +222,52 @@ def _prepare_arguments(Ai, Aj, Ax, x):
     Ai = jnp.asarray(Ai)
     Aj = jnp.asarray(Aj)
     Ax = jnp.asarray(Ax)
+
     x = jnp.asarray(x)
     shape = x.shape
 
     if x.ndim < 2:
         x = jnp.atleast_2d(x).T
 
+    if Ax.ndim < 2:
+        Ax = jnp.atleast_2d(Ax)
+
     n_col, n_rhs, *_ = x.shape[Ax.ndim - 1 :] + (1,)
 
     *_, n_nz = Ax.shape
     Ax = Ax.reshape(-1, n_nz)
-    n_lhs, _ = Ax.shape
-
     x = x.reshape(-1, n_col, n_rhs)
-    return Ai, Aj, Ax, x, shape, n_lhs, n_nz, n_col, n_rhs
+    n_lhs = max(Ax.shape[0], x.shape[0])
+    Ax = jnp.broadcast_to(Ax, (n_lhs, n_nz))
+    x = jnp.broadcast_to(x, (n_lhs, n_col, n_rhs))
+
+    print(f"{Ax.shape=}")
+    print(f"{x.shape=}")
+    print(f"{n_lhs=}")
+    print(f"{n_nz=}")
+    print(f"{n_col=}")
+    print(f"{n_rhs=}")
+
+    return Ai, Aj, Ax, x, shape
 
 
-# # Lowerings ===========================================================================
-#
-#
-# def solve_f64_lowering(ctx, Ai, Aj, Ax, b):
-#     result_avals = ctx.avals_out if ctx.avals_out is not None else ()
-#     result_types = list(
-#         mlir.flatten_ir_types([mlir.aval_to_ir_type(aval) for aval in result_avals])
-#     )
-#     custom_call = hlo.CustomCallOp(
-#         result_types,
-#         operands,
-#         call_target_name=ir.StringAttr.get("tf.call_tf_function"),
-#         has_side_effect=False,,
-#         api_version=1,
-#         called_computations=ir.ArrayAttr.get([]),
-#         backend_config=ir.StringAttr.get(""),
-#     )
-#
-#     print(ctx)
-#
-#
-# mlir.register_lowering(solve_f64, solve_f64_lowering, "cpu")
+# Lowerings ===========================================================================
+
+
+solve_f64_lowering = mlir.lower_fun(solve_f64_impl, multiple_results=False)
+mlir.register_lowering(solve_f64, solve_f64_lowering)
+
+solve_c128_lowering = mlir.lower_fun(solve_c128_impl, multiple_results=False)
+mlir.register_lowering(solve_c128, solve_c128_lowering)
+
+coo_mul_vec_f64_lowering = mlir.lower_fun(coo_mul_vec_f64_impl, multiple_results=False)
+mlir.register_lowering(coo_mul_vec_f64, coo_mul_vec_f64_lowering)
+
+coo_mul_vec_c128_lowering = mlir.lower_fun(
+    coo_mul_vec_c128_impl, multiple_results=False
+)
+mlir.register_lowering(coo_mul_vec_c128, coo_mul_vec_c128_lowering)
+
 
 # Abstract Evaluations ================================================================
 
@@ -366,9 +380,10 @@ def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
         assert isinstance(ab, int)
         if ab != 0:
             b = jnp.moveaxis(b, ab, 0)
+        print(b.shape)
         n_lhs, n_col, *n_rhs_list = b.shape
         n_rhs = np.prod(np.array(n_rhs_list, dtype=np.int32))
-        b = b.reshape(n_lhs, n_col, n_rhs).transpose((1, 0, 2)).reshape(n_col, -1)
+        b = b.reshape(n_lhs, n_col, n_rhs).transpose((1, 0, 2)).reshape(n_col, -1)[None]
         result = operation(Ai, Aj, Ax, b)
         result = result.reshape(n_col, n_lhs, *n_rhs_list)
         return result, 1
@@ -384,44 +399,91 @@ if __name__ == "__main__":
     n_col = 5
     n_rhs = 1
     n_lhs = 3  # only used in batched & vmap
-    dtype = np.float64
+    dtype = np.complex128
 
     ## SINGLE =========================================================================
-    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
-    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    b = jax.random.normal(bkey, (n_col, n_rhs), dtype=dtype)
-    x_sp = solve(Ai, Aj, Ax, b)
+    if False:
+        print("single")
+        Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
+        Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
+        Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
+        Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
+        b = jax.random.normal(bkey, (n_col, n_rhs), dtype=dtype)
+        x_sp = jax.jit(solve)(Ai, Aj, Ax, b)
 
-    A = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax)
-    x = jsp.linalg.solve(A, b)
+        A = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax)
+        x = jsp.linalg.solve(A, b)
 
-    print(x_sp - x)
+        print(x_sp - x)
+        print(((x_sp - x) < 1e-9).all())
 
     ## BATCHED ========================================================================
-    # Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    # Ax = jax.random.normal(Axkey, (n_lhs, n_nz), dtype=dtype)
-    # Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-    # Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    # b = jax.random.normal(bkey, (n_lhs, n_col, n_rhs), dtype=dtype)
-    # x_sp = solve(Ai, Aj, Ax, b)
+    if False:
+        print("batched")
+        Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
+        Ax = jax.random.normal(Axkey, (n_lhs, n_nz), dtype=dtype)
+        Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
+        Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
+        b = jax.random.normal(bkey, (n_lhs, n_col, n_rhs), dtype=dtype)
+        x_sp = solve(Ai, Aj, Ax, b)
 
-    # A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
-    # x = jax.vmap(jsp.linalg.solve, (0, 0), 0)(A, b)
+        A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
+        x = jax.vmap(jsp.linalg.solve, (0, 0), 0)(A, b)
 
-    # print(x_sp - x)
+        print(x_sp - x)
+        print(((x_sp - x) < 1e-9).all())
 
-    ## VMAP ========================================================================
+    ## RHS ============================================================================
+    if False:
+        print("rhs")
+        Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
+        Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
+        Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
+        Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
+        b = jax.random.normal(bkey, (n_col, 2), dtype=dtype)
 
-    # Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    # Ax = jax.random.normal(Axkey, (n_lhs, n_nz), dtype=dtype).T
-    # Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-    # Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    # b = jax.random.normal(bkey, (n_col, n_rhs, n_lhs), dtype=dtype)
-    # x_sp = jax.vmap(solve, (None, None, 1, 2), 0)(Ai, Aj, Ax, b)
+        x_sp = solve(Ai, Aj, Ax, b[None])
+        x_sp1 = solve(Ai, Aj, Ax, b[None, :, 0:1])
+        x_sp2 = solve(Ai, Aj, Ax, b[None, :, 1:2])
 
-    # A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax.T)
-    # x = jax.vmap(jsp.linalg.solve, (0, 0), 0)(A, b.transpose(2, 0, 1))
+        A = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax)
+        x = np.linalg.solve(A, b)
 
-    # print(x_sp - x)
+        print(b)
+        print(x_sp)
+        print(x_sp1)
+        print(x_sp2)
+
+    ## VMAP A & b =====================================================================
+    if False:
+        print("vmap A & b")
+        Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
+        Ax = jax.random.normal(Axkey, (n_lhs, n_nz), dtype=dtype).T
+        Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
+        Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
+        b = jax.random.normal(bkey, (n_col, n_rhs, n_lhs), dtype=dtype)
+        x_sp = jax.vmap(solve, (None, None, 1, 2), 0)(Ai, Aj, Ax, b)
+
+        A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax.T)
+        x = jax.vmap(jsp.linalg.solve, (0, 0), 0)(A, b.transpose(2, 0, 1))
+
+        print(x_sp - x)
+        print(((x_sp - x) < 1e-9).all())
+
+    ## VMAP A =========================================================================
+    if False:
+        print("vmap A")
+        Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
+        Ax = jax.random.normal(Axkey, (n_lhs, n_nz), dtype=dtype)
+        Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
+        Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
+        b = jax.random.normal(bkey, (n_col, n_rhs), dtype=dtype)
+
+        vsolve = jax.vmap(solve, in_axes=(None, None, 0, None), out_axes=0)
+        x_sp = vsolve(Ai, Aj, Ax, b)
+
+        A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
+        x = jsp.linalg.solve(A, b[None])
+
+        print(x_sp - x)
+        print(((x_sp - x) < 1e-9).all())
