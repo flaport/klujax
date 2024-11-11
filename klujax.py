@@ -8,6 +8,7 @@ __all__ = ["solve", "coo_mul_vec"]
 
 # Imports =============================================================================
 
+import sys
 from functools import partial
 
 import jax
@@ -23,8 +24,11 @@ import klujax_cpp
 
 # Config ==============================================================================
 
+VERBOSE = True
 jax.config.update("jax_enable_x64", True)
 jax.config.update("jax_platform_name", "cpu")
+
+_log = lambda s: None if not VERBOSE else print(s, file=sys.stderr)
 
 # The main functions ==================================================================
 
@@ -219,7 +223,17 @@ def _prepare_arguments(Ai, Aj, Ax, x):
     x = jnp.asarray(x)
     shape = x.shape
 
+    _log(f"{Ai.dtype=}")
+    _log(f"{Aj.dtype=}")
+    _log(f"{Ai.max()=}")
+    _log(f"{Aj.max()=}")
+    _log(f"{Ax.dtype=}")
+    _log(f"{x.dtype=}")
+    _log(f"{Ax.shape=}")
+    _log(f"{x.shape=}")
+
     prefer_x_rhs_over_lhs = (Ax.ndim < 2) or (Ax.shape[0] != x.shape[0])
+    _log(f"{prefer_x_rhs_over_lhs=}")
 
     if Ax.ndim > 2:
         raise ValueError(
@@ -231,6 +245,8 @@ def _prepare_arguments(Ai, Aj, Ax, x):
 
     a_n_lhs, n_nz = Ax.shape
     Ax = Ax.reshape(-1, n_nz)
+    _log(f"{Ax.shape=}")
+    _log(f"{n_nz=}")
 
     if x.ndim == 0:
         x = x[None, None, None]
@@ -251,10 +267,18 @@ def _prepare_arguments(Ai, Aj, Ax, x):
             f"x should be at most 2D with shape: (n_lhs, n_col, n_rhs). Got: {x.shape}. "
             "Note: jax.vmap is supported. Use it if needed."
         )
+    _log(f"{x.shape=}")
+    _log(f"{n_col=}")
+    _log(f"{n_rhs=}")
 
     n_lhs = max(a_n_lhs, x_n_lhs)
+    _log(f"{n_lhs=}")
+
     Ax = jnp.broadcast_to(Ax, (n_lhs, n_nz))
     x = jnp.broadcast_to(x, (n_lhs, n_col, n_rhs))
+
+    _log(f"{Ax.shape=}")
+    _log(f"{x.shape=}")
 
     # We retain the old shape of b so the result of the primitive can be
     # reshaped to the expected shape.
@@ -295,7 +319,10 @@ def coo_vec_operation_abstract_eval(Ai, Aj, Ax, b):
 @ad_register(solve_c128)
 def solve_value_and_jvp(arg_values, arg_tangents):
     Ai, Aj, Ax, b = arg_values
+    print(Ax)
+    print(b)
     dAi, dAj, dAx, db = arg_tangents
+    print(dAi, dAj, dAx, db)
     dAx = dAx if not isinstance(dAx, ad.Zero) else lax.zeros_like_array(Ax)
     dAi = dAi if not isinstance(dAi, ad.Zero) else lax.zeros_like_array(Ai)
     dAj = dAj if not isinstance(dAj, ad.Zero) else lax.zeros_like_array(Aj)
@@ -417,7 +444,7 @@ if __name__ == "__main__":
         Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
         Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
         b = jax.random.normal(bkey, (n_col, n_rhs), dtype=dtype)
-        x_sp = jax.jit(solve)(Ai, Aj, Ax, b)
+        x_sp = solve(Ai, Aj, Ax, b)
 
         A = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax)
         x = jsp.linalg.solve(A, b)
@@ -549,3 +576,92 @@ if __name__ == "__main__":
         _grad = jax.grad(_loss, argnums=[0, 1])
 
         print(_grad(Ax, b))
+
+    ## Sax snippet ====================================================================
+    if True:
+        Ai = jnp.array(
+            [6, 4, 6, 4, 2, 11, 1, 8, 7, 7, 5, 5, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+            dtype=jnp.int32,
+        )
+        Aj = jnp.array(
+            [
+                0,
+                0,
+                3,
+                3,
+                5,
+                4,
+                7,
+                6,
+                9,
+                10,
+                9,
+                10,
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+            ],
+            dtype=jnp.int32,
+        )
+        Ax = jnp.array(
+            [
+                [
+                    -0.70710678 - 0.0j,
+                    -0.0 - 0.70710678j,
+                    -0.0 - 0.70710678j,
+                    -0.70710678 - 0.0j,
+                    -0.82076344 - 0.57126822j,
+                    -0.82076344 - 0.57126822j,
+                    -0.82076344 - 0.57126822j,
+                    -0.82076344 - 0.57126822j,
+                    -0.70710678 - 0.0j,
+                    -0.0 - 0.70710678j,
+                    -0.0 - 0.70710678j,
+                    -0.70710678 - 0.0j,
+                    1.0 + 0.0j,
+                    1.0 + 0.0j,
+                    1.0 + 0.0j,
+                    1.0 + 0.0j,
+                    1.0 + 0.0j,
+                    1.0 + 0.0j,
+                    1.0 + 0.0j,
+                    1.0 + 0.0j,
+                    1.0 + 0.0j,
+                    1.0 + 0.0j,
+                    1.0 + 0.0j,
+                    1.0 + 0.0j,
+                ]
+            ],
+            dtype=jnp.complex128,
+        )
+        b = jnp.array(
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+                [0.0, 0.0, 0.0, 0.0],
+            ],
+            dtype=jnp.complex128,
+        )
+        print(f"{Ai.shape=}")
+        print(f"{Aj.shape=}")
+        print(f"{Ax.shape=}")
+        print(f"{b.shape=}")
+        solve_c128_impl(Ai, Aj, Ax, b)
