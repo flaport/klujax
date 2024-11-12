@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 suitesparse
 xla
+pybind11
 
 # C extensions
 *.so

@@ -17,8 +17,15 @@ suitesparse:
 .PHONY: xla
 xla:
 	rm -rf xla
-	git clone --depth 1 --branch main https://github.com/openxla/xla
+	git clone --depth 1 --branch main https://github.com/openxla/xla xla
 	cd xla && rm -rf .git
+
+.PHONY: pybind11
+pybind11:
+	rm -rf pybind11
+	git clone --depth 1 --branch stable https://github.com/pybind/pybind11 pybind11
+	cd pybind11 && rm -rf .git
+
 
 clean:
 	find . -not -path "./suitesparse*"  -not -path "./xla*" -name "dist" | xargs rm -rf
