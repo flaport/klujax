@@ -24,7 +24,7 @@ description = "a KLU solver for JAX"
 license = {file = "LICENSE"}
 name = "klujax"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 version = "0.3.0"
 
 [project.optional-dependencies]
@@ -38,7 +38,7 @@ dev = [
 [tool.black]
 include = '\.pyi?$'
 line-length = 88
-target-version = ['py312']
+target-version = ['py310']
 
 [tool.codespell]
 ignore-words-list = "COO"
