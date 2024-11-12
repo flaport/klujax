@@ -80,7 +80,7 @@ setup(
     py_modules=["klujax"],
     ext_modules=extensions,
     cmdclass={"build_ext": build_ext},
-    install_requires=["jax>=0.4.35", "jaxlib>=0.4.35", "pybind11"],
+    install_requires=["jax==0.4.35", "jaxlib==0.4.35"],
     python_requires=">=3.10",
     classifiers=[
         "Development Status :: 3 - Alpha",

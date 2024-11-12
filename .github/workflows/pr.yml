@@ -29,7 +29,7 @@ jobs:
           CIBW_ARCHS_MACOS: x86_64 arm64
           CIBW_ARCHS_LINUX: x86_64
           CIBW_ARCHS_WINDOWS: AMD64
-          CIBW_BUILD: 'cp312-macosx_universal2 cp312-win32 cp312-manylinux_x86_64'
+          CIBW_BUILD: '*cp312*'
 
       - uses: actions/upload-artifact@v3
         with:
