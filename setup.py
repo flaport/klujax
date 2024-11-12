@@ -29,9 +29,8 @@ suitesparse_sources = [
 ]
 
 
-extensions = {}
-if sys.platform == "linux":
-    extensions["klujax"] = Extension(
+if sys.platform == "linux":  # gcc
+    extension = Extension(
         name="klujax_cpp",
         sources=["klujax.cpp", *suitesparse_sources],
         include_dirs=include_dirs,
@@ -40,8 +39,8 @@ if sys.platform == "linux":
         extra_link_args=["-static-libgcc", "-static-libstdc++"],
         language="c++",
     )
-elif sys.platform == "win32":
-    extensions["klujax"] = Extension(
+elif sys.platform == "win32":  # cl
+    extension = Extension(
         name="klujax_cpp",
         sources=["klujax.cpp", *suitesparse_sources],
         include_dirs=include_dirs,
@@ -50,25 +49,18 @@ elif sys.platform == "win32":
         extra_link_args=[],
         language="c++",
     )
-elif sys.platform == "darwin":  # MacOS
-    extensions["klujax"] = Extension(
+elif sys.platform == "darwin":  # MacOS: clang
+    extension = Extension(
         name="klujax_cpp",
-        sources=["klujax.cpp"],
+        sources=["klujax.cpp", *suitesparse_sources],
         include_dirs=include_dirs,
         library_dirs=site.getsitepackages(),
-        extra_compile_args=["-std=c++17"],
+        extra_compile_args=[],  # clang defaults to c++17 and setting -std=c++17 prevents combined build with suitesparse c source.
         extra_link_args=[],
         language="c++",
     )
-    extensions["klujax_ss"] = Extension(
-        name="klujax_ss",
-        sources=suitesparse_sources,
-        include_dirs=include_dirs,
-        library_dirs=site.getsitepackages(),
-        extra_compile_args=[],
-        extra_link_args=[],
-        language="c",
-    )
+else:
+    raise RuntimError(f"Platform {sys.platform} not supported.")
 
 
 setup(
@@ -81,7 +73,7 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/flaport/klujax",
     py_modules=["klujax"],
-    ext_modules=list(extensions.values()),
+    ext_modules=[extension],
     cmdclass={"build_ext": build_ext},
     install_requires=["jax>=0.4.35", "jaxlib>=0.4.35"],
     python_requires=">=3.8",
