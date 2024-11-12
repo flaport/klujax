@@ -1,5 +1,3 @@
-// version: 0.2.10
-// author: Floris Laporte
 
 // Imports
 
@@ -12,7 +10,7 @@ namespace ffi = xla::ffi;
 
 // Helper functions
 
-void _coo_to_csc_analyze(int n_col, int n_nz, int *Ai, int *Aj, int *Bi,
+bool _coo_to_csc_analyze(int n_col, int n_nz, int *Ai, int *Aj, int *Bi,
                          int *Bp, int *Bk) {
   // compute number of non-zero entries per row of A
   for (int n = 0; n < n_nz; n++) {
@@ -28,12 +26,18 @@ void _coo_to_csc_analyze(int n_col, int n_nz, int *Ai, int *Aj, int *Bi,
     cumsum += temp;
   }
 
-  // write Ai, Ax into Bi, Bk
+  // write Ai, Aj into Bi, Bk
   int col = 0;
   int dest = 0;
   for (int n = 0; n < n_nz; n++) {
+    if (Aj[n] >= n_col) {
+      return false;
+    }
     col = Aj[n];
     dest = Bp[col];
+    if (Ai[n] >= n_col) {
+      return false;
+    }
     Bi[dest] = Ai[n];
     Bk[dest] = n;
     Bp[col] += 1;
@@ -45,6 +49,7 @@ void _coo_to_csc_analyze(int n_col, int n_nz, int *Ai, int *Aj, int *Bi,
     Bp[i] = last;
     last = temp;
   }
+  return true;
 }
 
 // Implementations
@@ -75,7 +80,21 @@ ffi::Error _solve_f64(ffi::Buffer<ffi::DataType::S32> buf_Ai,
   int *Bk = new int[n_nz](); // Ax -> Bx transformation indices
   int *Bi = new int[n_nz]();
   int *Bp = new int[n_col + 1]();
-  _coo_to_csc_analyze(n_col, n_nz, Ai, Aj, Bi, Bp, Bk);
+  double *Bx = new double[n_nz]();
+
+  bool is_valid = _coo_to_csc_analyze(n_col, n_nz, Ai, Aj, Bi, Bp, Bk);
+  if (!is_valid) {
+    delete[] Bk;
+    delete[] Bi;
+    delete[] Bp;
+    delete[] Bx;
+    return ffi::Error::InvalidArgument(
+        "max(Ai, Aj) >= n_col. Broadcasted shapes: Ax: (n_lhs=" +
+        std::to_string(n_lhs) + ", n_nz=" + std::to_string(n_nz) +
+        "); b: (n_lhs=" + std::to_string(n_lhs) + ", n_col=" +
+        std::to_string(n_col) + ", n_rhs=" + std::to_string(n_rhs) +
+        "). You might want to transpose b?");
+  }
 
   // initialize KLU for given sparsity pattern
   klu_symbolic *Symbolic;
@@ -86,7 +105,6 @@ ffi::Error _solve_f64(ffi::Buffer<ffi::DataType::S32> buf_Ai,
 
   // solve for other elements in batch:
   // NOTE: same sparsity pattern for each element in batch assumed
-  double *Bx = new double[n_nz]();
   for (int i = 0; i < n_lhs; i++) {
     int m = i * n_nz;
     int n = i * n_rhs * n_col;
@@ -136,11 +154,19 @@ _coo_mul_vec_f64(ffi::Buffer<ffi::DataType::S32> buf_Ai,
   }
 
   // fill result
-  for (int i = 0; i < n_lhs; i++) {
-    int m = i * n_nz;
-    int n = i * n_rhs * n_col;
-    for (int j = 0; j < n_rhs; j++) {
-      for (int k = 0; k < n_nz; k++) {
+  for (int k = 0; k < n_nz; k++) {
+    if (Ai[k] >= n_col || Aj[k] >= n_col) {
+      return ffi::Error::InvalidArgument(
+          "max(Ai, Aj) >= n_col. Broadcasted shapes: Ax: (n_lhs=" +
+          std::to_string(n_lhs) + ", n_nz=" + std::to_string(n_nz) +
+          "); b: (n_lhs=" + std::to_string(n_lhs) + ", n_col=" +
+          std::to_string(n_col) + ", n_rhs=" + std::to_string(n_rhs) +
+          "). You might want to transpose b?");
+    }
+    for (int i = 0; i < n_lhs; i++) {
+      int m = i * n_nz;
+      int n = i * n_rhs * n_col;
+      for (int j = 0; j < n_rhs; j++) {
         b[n + Ai[k] + j * n_col] += Ax[m + k] * x[n + Aj[k] + j * n_col];
       }
     }
@@ -174,7 +200,20 @@ ffi::Error _solve_c128(ffi::Buffer<ffi::DataType::S32> buf_Ai,
   int *Bk = new int[n_nz]();      // Ax -> Bx transformation indices
   int *Bi = new int[n_nz]();      // CSC row indices
   int *Bp = new int[n_col + 1](); // CSC column pointers
-  _coo_to_csc_analyze(n_col, n_nz, Ai, Aj, Bi, Bp, Bk);
+  double *Bx = new double[2 * n_nz]();
+  bool is_valid = _coo_to_csc_analyze(n_col, n_nz, Ai, Aj, Bi, Bp, Bk);
+  if (!is_valid) {
+    delete[] Bk;
+    delete[] Bi;
+    delete[] Bp;
+    delete[] Bx;
+    return ffi::Error::InvalidArgument(
+        "max(Ai, Aj) >= n_col. Broadcasted shapes: Ax: (n_lhs=" +
+        std::to_string(n_lhs) + ", n_nz=" + std::to_string(n_nz) +
+        "); b: (n_lhs=" + std::to_string(n_lhs) + ", n_col=" +
+        std::to_string(n_col) + ", n_rhs=" + std::to_string(n_rhs) +
+        "). You might want to transpose b?");
+  }
 
   // initialize KLU for given sparsity pattern
   klu_symbolic *Symbolic;
@@ -185,7 +224,6 @@ ffi::Error _solve_c128(ffi::Buffer<ffi::DataType::S32> buf_Ai,
 
   // solve for other elements in batch:
   // NOTE: same sparsity pattern for each element in batch assumed
-  double *Bx = new double[2 * n_nz]();
   for (int i = 0; i < n_lhs; i++) {
     int m = 2 * i * n_nz;
     int n = 2 * i * n_rhs * n_col;
@@ -235,11 +273,19 @@ _coo_mul_vec_c128(ffi::Buffer<ffi::DataType::S32> buf_Ai,
     b[i] = 0.0;
   }
   // fill result
-  for (int i = 0; i < n_lhs; i++) {
-    int m = 2 * i * n_nz;
-    int n = 2 * i * n_rhs * n_col;
-    for (int j = 0; j < n_rhs; j++) {
-      for (int k = 0; k < n_nz; k++) {
+  for (int k = 0; k < n_nz; k++) {
+    if (Ai[k] >= n_col || Aj[k] >= n_col) {
+      return ffi::Error::InvalidArgument(
+          "max(Ai, Aj) >= n_col. Broadcasted shapes: Ax: (n_lhs=" +
+          std::to_string(n_lhs) + ", n_nz=" + std::to_string(n_nz) +
+          "); b: (n_lhs=" + std::to_string(n_lhs) + ", n_col=" +
+          std::to_string(n_col) + ", n_rhs=" + std::to_string(n_rhs) +
+          "). You might want to transpose b?");
+    }
+    for (int i = 0; i < n_lhs; i++) {
+      int m = 2 * i * n_nz;
+      int n = 2 * i * n_rhs * n_col;
+      for (int j = 0; j < n_rhs; j++) {
         b[n + 2 * (Ai[k] + j * n_col)] +=                    // real part
             Ax[m + 2 * k] * x[n + 2 * (Aj[k] + j * n_col)] - // real * real
             Ax[m + 2 * k + 1] *
