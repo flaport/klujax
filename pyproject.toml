@@ -1,11 +1,47 @@
 [build-system]
-requires = ["setuptools", "pip", "build", "wheel"]
 build-backend = "setuptools.build_meta"
+requires = ["setuptools", "pip", "build", "wheel"]
+
+[project]
+authors = [
+  {name = "Floris Laporte", email = "floris.laporte@gmail.com"}
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 2.7",
+  "License :: OSI Approved :: GNU Lesser General Public License v2 (LGPLv2)",
+  "Operating System :: OS Independent",
+  "Topic :: Scientific/Engineering :: Mathematics"
+]
+dependencies = [
+  "jax>=0.4.35",
+  "jaxlib>=0.4.35",
+  "numpy>=2"
+]
+description = "a KLU solver for JAX"
+license = {file = "LICENSE"}
+name = "klujax"
+readme = "README.md"
+requires-python = ">=3.8"
+version = "0.2.10"
+
+[project.optional-dependencies]
+dev = [
+  "pre-commit",
+  "tbump",
+  "ruff",
+  "uv"
+]
 
 [tool.black]
+include = '\.pyi?$'
 line-length = 88
 target-version = ['py312']
-include = '\.pyi?$'
+
+[tool.codespell]
+ignore-words-list = "COO"
+skip = "*.ipynb"
 
 [tool.pyright]
 reportPrivateImportUsage = false
@@ -13,6 +49,13 @@ reportUnusedVariable = false
 
 [tool.ruff.pydocstyle]
 convention = "google"
+
+[tool.setuptools.package-data]
+"*" = [
+  "LICENSE",
+  "README.md",
+  "MANIFEST.in"
+]
 
 [tool.tbump]
 regex = '''
@@ -23,9 +66,21 @@ regex = '''
   (?P<patch>\d+)
   '''
 
+[[tool.tbump.file]]
+src = "README.md"
+
+[[tool.tbump.file]]
+src = "pyproject.toml"
+
+[[tool.tbump.file]]
+src = "klujax.py"
+
+[[tool.tbump.file]]
+src = "klujax.cpp"
+
 [tool.tbump.git]
 message_template = "Bump version: {old_version} → {new_version}"
 tag_template = "{new_version}"
 
 [tool.tbump.version]
-current = "0.8.4"
+current = "0.2.10"

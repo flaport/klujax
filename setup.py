@@ -6,8 +6,6 @@ import sys
 from glob import glob
 
 from setuptools import Extension, setup
-from setuptools._distutils._log import log
-from setuptools._distutils._modified import newer_group
 from setuptools.command.build_ext import build_ext
 
 CWD = os.path.dirname(os.path.abspath(__file__))
@@ -62,7 +60,7 @@ elif sys.platform == "darwin":  # MacOS: clang
         language="c++",
     )
 else:
-    raise RuntimError(f"Platform {sys.platform} not supported.")
+    raise RuntimeError(f"Platform {sys.platform} not supported.")
 
 
 # Custom BuildExt to enable combined build of C and C++ files on MacOs (clang)
@@ -86,7 +84,7 @@ class BuildExt(build_ext):
             extra_postargs=[
                 f
                 for f in ext.extra_compile_args
-                if not f in ["-std=c++17", "/std:c++17"]  # THIS IS OUR HACK
+                if f not in ["-std=c++17", "/std:c++17"]  # THIS IS OUR HACK
             ],
             depends=ext.depends,
         )
@@ -116,32 +114,7 @@ class BuildExt(build_ext):
 
 
 setup(
-    name="klujax",
-    version="0.2.10",
-    author="Floris Laporte",
-    author_email="floris.laporte@gmail.com",
-    description="a KLU solver for JAX",
-    long_description=open("README.md", "r").read(),
-    long_description_content_type="text/markdown",
-    url="https://github.com/flaport/klujax",
     py_modules=["klujax"],
     ext_modules=[extension],
     cmdclass={"build_ext": BuildExt},
-    install_requires=["jax>=0.4.35", "jaxlib>=0.4.35"],
-    python_requires=">=3.8",
-    classifiers=[
-        "Development Status :: 3 - Alpha",
-        "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 2.7",
-        "License :: OSI Approved :: GNU Lesser General Public License v2 (LGPLv2)",
-        "Operating System :: OS Independent",
-        "Topic :: Scientific/Engineering :: Mathematics",
-    ],
-    package_data={
-        "*": [
-            "LICENSE",
-            "README.md",
-            "MANIFEST.in",
-        ],
-    },
 )
