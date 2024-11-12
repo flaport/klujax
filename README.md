@@ -1,7 +1,6 @@
 # KLUJAX
 
-A sparse linear solver for JAX based on the
-efficient [KLU algorithm](https://ufdcimages.uflib.ufl.edu/UF/E0/01/17/21/00001/palamadai_e.pdf).
+A sparse linear solver for JAX based on the efficient [KLU algorithm](https://ufdcimages.uflib.ufl.edu/UF/E0/01/17/21/00001/palamadai_e.pdf).
 
 ## CPU & float64
 
@@ -10,36 +9,55 @@ algorithms. This means the algorithm is only implemented for
 C-arrays and hence is **only available for CPU
 arrays with double precision**, i.e. float64 or complex128.
 
-Note that this will be enforced at import of `klujax`!
+Note that `float32`/`complex64` arrays will be cast to `float64`/`complex128`!
 
 ## Usage
 
-The `klujax` library provides a single function `solve(A, b)`, which solves for `x` in
-the linear system `Ax=b` A is a sparse tensor in COO-format with shape `mxm` and x and b
-have shape `mxn`. Note that JAX does not have a native sparse matrix representation and
-hence A should be represented as a tuple of two index arrays and a value
-array: `(Ai, Aj, Ax)`.
+The `klujax` library provides a single function `solve(Ai, Aj, Ax, b)`, which solves for `x` in
+the sparse linear system `Ax=b`, where `A` is explicitly given in COO-format (`Ai`, `Aj`, `Ax`).
 
+Supported shapes (`?` suffix means optional):
+  - `Ai`: `(n_nz,)`
+  - `Aj`: `(n_nz,)`
+  - `Ax`: `(n_lhs?, n_nz)`
+  - `b`: `(n_lhs?, n_col, n_rhs?)`
+  - `A` (represented by (`Ai`, `Aj`, `Ax`)): (`n_lhs?`, `n_col`, `n_col`)
+
+Additional dimensions can be added with `jax.vmap` (alternatively any higher dimensional
+problem can be reduced to the one above by properly transposing and reshaping `Ax` and `b`).
+
+> NOTE: JAX now has an experimental sparse library (`jax.experimental.sparse`). Using
+> this natively in KLUJAX is not yet supported (but converting from `BCOO` or `COO` to
+> `Ai`, `Aj`, `Ax` is trivial).
+
+## Basic Example
+
+Script:
 ```python
+import klujax
 import jax.numpy as jnp
-from klujax import solve
 
-b = jnp.array([8, 45, -3, 3, 19], dtype=jnp.float64)
-A_dense = jnp.array([[2, 3, 0, 0, 0],
-                     [3, 0, 4, 0, 6],
-                     [0, -1, -3, 2, 0],
-                     [0, 0, 1, 0, 0],
-                     [0, 4, 2, 0, 1]], dtype=jnp.float64)
+b = jnp.array([8, 45, -3, 3, 19])
+A_dense = jnp.array(
+    [
+        [2, 3, 0, 0, 0],
+        [3, 0, 4, 0, 6],
+        [0, -1, -3, 2, 0],
+        [0, 0, 1, 0, 0],
+        [0, 4, 2, 0, 1],
+    ]
+)
 Ai, Aj = jnp.where(jnp.abs(A_dense) > 0)
 Ax = A_dense[Ai, Aj]
 
-result_ref = jnp.linalg.inv(A_dense)@b
-result = solve(Ai, Aj, Ax, b)
+result_ref = jnp.linalg.inv(A_dense) @ b
+result = klujax.solve(Ai, Aj, Ax, b)
 
 print(jnp.abs(result - result_ref) < 1e-12)
 print(result)
 ```
 
+Output:
 ```
 [ True True True True True]
 [1. 2. 3. 4. 5.]
@@ -56,14 +74,36 @@ pip install klujax
 
 **There exist pre-built wheels for Linux and Windows (python 3.8+).** If no compatible
 wheel is found, however, pip will attempt to install the library from source... make
-sure you have the necessary build dependencies installed.
+sure you have the necessary build dependencies installed (see [Installing from Source](#installing-from-source))
+
+
+## Installing from Source
+
+> NOTE: Installing from source should only be necessary when developing the library. If
+> you as the user experience an install from source please create an issue.
+
+Before installing, clone the build dependencies:
+
+```sh
+git clone --depth 1 --branch v7.2.0 https://github.com/DrTimothyAldenDavis/SuiteSparse suitesparse
+git clone --depth 1 --branch main https://github.com/openxla/xla xla
+git clone --depth 1 --branch stable https://github.com/pybind/pybind11 pybind11
+```
 
 ### Linux
 
-On linux, you'll need `gcc` and `g++`. Then just do a normal pip install:
+On linux, you'll need `gcc` and `g++`, then inside the repo:
 
 ```sh
-pip install klujax
+pip install .
+```
+
+### MacOs
+
+On MacOS, you'll need `clang`, then inside the repo:
+
+```sh
+pip install .
 ```
 
 ### Windows
@@ -85,9 +125,9 @@ Then, download and install Microsoft Visual C++ Redistributable from [here](http
 After these installation steps, run the following commands inside a x64 Native Tools
 Command Prompt for VS 2017:
 
-```
+```cmd
 set DISTUTILS_USE_SDK=1
-pip install klujax
+pip install .
 ```
 
 ## License & Credits

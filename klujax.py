@@ -1,39 +1,78 @@
 """ klujax: a KLU solver for JAX """
 
+# Metadata ============================================================================
+
 __version__ = "0.2.10"
 __author__ = "Floris Laporte"
 __all__ = ["solve", "coo_mul_vec"]
 
-
 # Imports =============================================================================
 
-
-from functools import partial, wraps
-from time import time
+import sys
+from functools import partial
 
 import jax
+import jax.extend
 import jax.numpy as jnp
+import jax.scipy as jsp
 import numpy as np
 from jax import core, lax
 from jax.core import ShapedArray
-from jax.interpreters import ad, batching
-from jaxlib import xla_client
-from jax._src.interpreters.xla import (
-    _backend_specific_translations,
-)
+from jax.interpreters import ad, batching, mlir
+from jaxlib.xla_extension import XlaRuntimeError
 
 import klujax_cpp
 
-
 # Config ==============================================================================
 
-
+DEBUG = False
 jax.config.update("jax_enable_x64", True)
 jax.config.update("jax_platform_name", "cpu")
+_log = lambda s: None if not DEBUG else print(s, file=sys.stderr)
+
+# The main functions ==================================================================
+
+
+@jax.jit
+def solve(Ai, Aj, Ax, b) -> jnp.ndarray:
+    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
+        result = solve_c128.bind(
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            Ax.astype(jnp.complex128),
+            b.astype(jnp.complex128),
+        )
+    else:
+        result = solve_f64.bind(
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            Ax.astype(jnp.float64),
+            b.astype(jnp.float64),
+        )
+
+    return result  # type: ignore
+
+
+@jax.jit
+def coo_mul_vec(Ai, Aj, Ax, b) -> jnp.ndarray:
+    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
+        result = coo_mul_vec_c128.bind(
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            Ax.astype(jnp.complex128),
+            b.astype(jnp.complex128),
+        )
+    else:
+        result = coo_mul_vec_f64.bind(
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            Ax.astype(jnp.float64),
+            b.astype(jnp.float64),
+        )
+    return result  # type: ignore
 
 
 # Constants ===========================================================================
-
 
 COMPLEX_DTYPES = (
     np.complex64,
@@ -43,43 +82,40 @@ COMPLEX_DTYPES = (
     jnp.complex128,
 )
 
-
 # Primitives ==========================================================================
-
 
 solve_f64 = core.Primitive("solve_f64")
 solve_c128 = core.Primitive("solve_c128")
 coo_mul_vec_f64 = core.Primitive("coo_mul_vec_f64")
 coo_mul_vec_c128 = core.Primitive("coo_mul_vec_c128")
 
+# Register XLA extensions ==============================================================
+
+jax.extend.ffi.register_ffi_target(
+    "_solve_f64",
+    klujax_cpp.solve_f64(),
+    platform="cpu",
+)
+
+jax.extend.ffi.register_ffi_target(
+    "_coo_mul_vec_f64",
+    klujax_cpp.coo_mul_vec_f64(),
+    platform="cpu",
+)
+
+jax.extend.ffi.register_ffi_target(
+    "_solve_c128",
+    klujax_cpp.solve_c128(),
+    platform="cpu",
+)
+
+jax.extend.ffi.register_ffi_target(
+    "_coo_mul_vec_c128",
+    klujax_cpp.coo_mul_vec_c128(),
+    platform="cpu",
+)
 
 # Helper Decorators ===================================================================
-
-_cpu_translations = _backend_specific_translations["cpu"]
-
-
-def _wrap_old_translation(f):
-    @wraps(f)
-    def wrapped(ctx, avals_in, avals_out, *args, **kw):
-        ans = f(ctx.builder, *args, **kw)
-        return [ans]
-
-    return wrapped
-
-
-def xla_register_cpu(primitive, cpp_fun):
-    name = primitive.name.encode()
-
-    def decorator(fun):
-        xla_client.register_custom_call_target(
-            name,
-            cpp_fun(),
-        )
-        _cpu_translations[primitive] = _wrap_old_translation(partial(fun, name))
-        #mlir.register_lowering(primitive, partial(fun, name), 'cpu')
-        return fun
-
-    return decorator
 
 
 def ad_register(primitive):
@@ -106,58 +142,191 @@ def vmap_register(primitive, operation):
     return decorator
 
 
-# The Functions =======================================================================
-
-
-@jax.jit  # jitting by default allows for empty implementation definitions
-def solve(Ai, Aj, Ax, b):
-    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
-        result = solve_c128.bind(
-            Ai.astype(jnp.int32),
-            Aj.astype(jnp.int32),
-            Ax.astype(jnp.complex128),
-            b.astype(jnp.complex128),
-        )
-    else:
-        result = solve_f64.bind(
-            Ai.astype(jnp.int32),
-            Aj.astype(jnp.int32),
-            Ax.astype(jnp.float64),
-            b.astype(jnp.float64),
-        )
-    return result
-
-
-@jax.jit  # jitting by default allows for empty implementation definitions
-def coo_mul_vec(Ai, Aj, Ax, b):
-    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
-        result = coo_mul_vec_c128.bind(
-            Ai.astype(jnp.int32),
-            Aj.astype(jnp.int32),
-            Ax.astype(jnp.complex128),
-            b.astype(jnp.complex128),
-        )
-    else:
-        result = coo_mul_vec_f64.bind(
-            Ai.astype(jnp.int32),
-            Aj.astype(jnp.int32),
-            Ax.astype(jnp.float64),
-            b.astype(jnp.float64),
-        )
-    return result
-
-
-# Implementation ======================================================================
+# Implementations =====================================================================
 
 
 @solve_f64.def_impl
-@solve_c128.def_impl
-@coo_mul_vec_f64.def_impl
-@coo_mul_vec_c128.def_impl
-def coo_vec_operation_impl(Ai, Aj, Ax, b):
-    # No implementations needed, as function is jitted by default (see above)
-    raise NotImplementedError
+def solve_f64_impl(Ai, Aj, Ax, b) -> jnp.ndarray:
+    Ai, Aj, Ax, b, shape = _prepare_arguments(Ai, Aj, Ax, b)
 
+    _b = b.transpose(0, 2, 1)
+    call = jax.extend.ffi.ffi_call(
+        "_solve_f64",
+        jax.ShapeDtypeStruct(_b.shape, _b.dtype),
+        vmap_method="broadcast_all",
+    )
+    result = call(  # type: ignore
+        Ai,
+        Aj,
+        Ax,
+        _b,
+    )
+    return result.transpose(0, 2, 1).reshape(*shape)  # type: ignore
+
+
+@solve_c128.def_impl
+def solve_c128_impl(Ai, Aj, Ax, b) -> jnp.ndarray:
+    Ai, Aj, Ax, b, shape = _prepare_arguments(Ai, Aj, Ax, b)
+
+    _b = b.transpose(0, 2, 1)
+    call = jax.extend.ffi.ffi_call(
+        "_solve_c128",
+        jax.ShapeDtypeStruct(_b.shape, _b.dtype),
+        vmap_method="broadcast_all",
+    )
+    result = call(  # type: ignore
+        Ai,
+        Aj,
+        Ax,
+        _b,
+    )
+    return result.transpose(0, 2, 1).reshape(*shape)  # type: ignore
+
+
+@coo_mul_vec_f64.def_impl
+def coo_mul_vec_f64_impl(Ai, Aj, Ax, x) -> jnp.ndarray:
+    Ai, Aj, Ax, x, shape = _prepare_arguments(Ai, Aj, Ax, x)
+    _x = x.transpose(0, 2, 1)
+    call = jax.extend.ffi.ffi_call(
+        "_coo_mul_vec_f64",
+        jax.ShapeDtypeStruct(_x.shape, _x.dtype),
+        vmap_method="broadcast_all",
+    )
+    result = call(  # type: ignore
+        Ai,
+        Aj,
+        Ax,
+        _x,
+    )
+    return result.transpose(0, 2, 1).reshape(*shape)  # type: ignore
+
+
+@coo_mul_vec_c128.def_impl
+def coo_mul_vec_c128_impl(Ai, Aj, Ax, x) -> jnp.ndarray:
+    Ai, Aj, Ax, x, shape = _prepare_arguments(Ai, Aj, Ax, x)
+    _x = x.transpose(0, 2, 1)
+    call = jax.extend.ffi.ffi_call(
+        "_coo_mul_vec_c128",
+        jax.ShapeDtypeStruct(_x.shape, _x.dtype),
+        vmap_method="broadcast_all",
+    )
+    result = call(  # type: ignore
+        Ai,
+        Aj,
+        Ax,
+        _x,
+    )
+    return result.transpose(0, 2, 1).reshape(*shape)  # type: ignore
+
+
+def _prepare_arguments(Ai, Aj, Ax, x):
+    Ai = jnp.asarray(Ai)
+    Aj = jnp.asarray(Aj)
+    Ax = jnp.asarray(Ax)
+    x = jnp.asarray(x)
+    shape = x.shape
+
+    _log(f"{Ai.dtype=}")
+    _log(f"{Aj.dtype=}")
+    _log(f"{Ai.max()=}")
+    _log(f"{Aj.max()=}")
+    _log(f"{Ax.dtype=}")
+    _log(f"{x.dtype=}")
+    _log(f"{Ax.shape=}")
+    _log(f"{x.shape=}")
+
+    prefer_x_rhs_over_lhs = (Ax.ndim < 2) or (Ax.shape[0] != x.shape[0])
+    _log(f"{prefer_x_rhs_over_lhs=}")
+
+    if Ax.ndim > 2:
+        raise ValueError(
+            f"Ax should be at most 2D with shape: (n_lhs, n_nz). Got: {Ax.shape}. "
+            "Note: jax.vmap is supported. Use it if needed."
+        )
+    else:
+        Ax = jnp.atleast_2d(Ax)
+
+    a_n_lhs, n_nz = Ax.shape
+    Ax = Ax.reshape(-1, n_nz)
+    _log(f"{Ax.shape=}")
+    _log(f"{n_nz=}")
+
+    if x.ndim == 0:
+        x = x[None, None, None]
+        x_n_lhs, n_col, n_rhs = x.shape
+        shape_includes_lhs = False
+    elif x.ndim == 1:
+        x = x[None, :, None]
+        x_n_lhs, n_col, n_rhs = x.shape
+        shape_includes_lhs = False
+    elif x.ndim == 2 and prefer_x_rhs_over_lhs:
+        x = x[None, :, :]
+        x_n_lhs, n_col, n_rhs = x.shape
+        shape_includes_lhs = False
+    elif x.ndim == 2 and not prefer_x_rhs_over_lhs:
+        x = x[:, :, None]
+        x_n_lhs, n_col, n_rhs = x.shape
+        shape_includes_lhs = True
+    elif x.ndim == 3:
+        x_n_lhs, n_col, n_rhs = x.shape
+        shape_includes_lhs = True
+    else:
+        raise ValueError(
+            f"x should be at most 3D with shape: (n_lhs, n_col, n_rhs). Got: {x.shape}. "
+            "Note: jax.vmap is supported. Use it if needed."
+        )
+    _log(f"{x.shape=}")
+    _log(f"{n_col=}")
+    _log(f"{n_rhs=}")
+
+    if a_n_lhs == x_n_lhs:
+        n_lhs = a_n_lhs
+    elif a_n_lhs > x_n_lhs:
+        if not x_n_lhs == 1:
+            raise ValueError(
+                f"Cannot broadcast n_lhs for x into n_lhs for Ax. "
+                f"Got: n_lhs[x]={x_n_lhs}; n_lhs[Ax]={a_n_lhs}."
+            )
+        n_lhs = a_n_lhs
+        if shape_includes_lhs:
+            shape = (n_lhs,) + shape[1:]
+        else:
+            shape = (n_lhs,) + shape
+    else:
+        if not a_n_lhs == 1:
+            raise ValueError(
+                f"Cannot broadcast n_lhs for Ax into n_lhs for x. "
+                f"Got: n_lhs[x]={x_n_lhs}; n_lhs[Ax]={a_n_lhs}."
+            )
+        n_lhs = x_n_lhs
+    _log(f"{n_lhs=}")
+
+    Ax = jnp.broadcast_to(Ax, (n_lhs, n_nz))
+    x = jnp.broadcast_to(x, (n_lhs, n_col, n_rhs))
+
+    _log(f"{Ax.shape=}")
+    _log(f"{x.shape=}")
+
+    # We retain the old shape of b so the result of the primitive can be
+    # reshaped to the expected shape.
+    return Ai, Aj, Ax, x, shape
+
+
+# Lowerings ===========================================================================
+
+solve_f64_lowering = mlir.lower_fun(solve_f64_impl, multiple_results=False)
+mlir.register_lowering(solve_f64, solve_f64_lowering)
+
+solve_c128_lowering = mlir.lower_fun(solve_c128_impl, multiple_results=False)
+mlir.register_lowering(solve_c128, solve_c128_lowering)
+
+coo_mul_vec_f64_lowering = mlir.lower_fun(coo_mul_vec_f64_impl, multiple_results=False)
+mlir.register_lowering(coo_mul_vec_f64, coo_mul_vec_f64_lowering)
+
+coo_mul_vec_c128_lowering = mlir.lower_fun(
+    coo_mul_vec_c128_impl, multiple_results=False
+)
+mlir.register_lowering(coo_mul_vec_c128, coo_mul_vec_c128_lowering)
 
 # Abstract Evaluations ================================================================
 
@@ -168,68 +337,6 @@ def coo_vec_operation_impl(Ai, Aj, Ax, b):
 @coo_mul_vec_c128.def_abstract_eval
 def coo_vec_operation_abstract_eval(Ai, Aj, Ax, b):
     return ShapedArray(b.shape, b.dtype)
-
-
-# XLA Implementations =================================================================
-
-
-@xla_register_cpu(solve_f64, klujax_cpp.solve_f64)
-@xla_register_cpu(solve_c128, klujax_cpp.solve_c128)
-@xla_register_cpu(coo_mul_vec_f64, klujax_cpp.coo_mul_vec_f64)
-@xla_register_cpu(coo_mul_vec_c128, klujax_cpp.coo_mul_vec_c128)
-def coo_vec_operation_xla(primitive_name, c, Ai, Aj, Ax, b):
-    Ax_shape = c.get_shape(Ax)
-    Ai_shape = c.get_shape(Ai)
-    Aj_shape = c.get_shape(Aj)
-    b_shape = c.get_shape(b)
-    *_n_lhs_list, _Anz = Ax_shape.dimensions()
-    assert len(_n_lhs_list) < 2, "solve alows for maximum one batch dimension."
-    _n_lhs = int(np.prod(np.array(_n_lhs_list, np.int32)))
-    Ax = xla_client.ops.Reshape(Ax, (_n_lhs * _Anz,))
-    Ax_shape = c.get_shape(Ax)
-    if _n_lhs_list:
-        _n_lhs_b, _n_col, *_n_rhs_list = b_shape.dimensions()
-    else:
-        _n_col, *_n_rhs_list = b_shape.dimensions()
-        _n_lhs_b = 1
-    assert _n_lhs_b == _n_lhs, "Batch dimension of Ax and b don't match."
-    _n_col = int(_n_col)
-    _n_rhs = int(np.prod(np.array(_n_rhs_list, dtype=np.int32)))
-    b = xla_client.ops.Reshape(b, (_n_lhs, _n_col, _n_rhs))
-    b = xla_client.ops.Transpose(b, (0, 2, 1))
-    b = xla_client.ops.Reshape(b, (_n_lhs * _n_rhs * _n_col,))
-    b_shape = c.get_shape(b)
-    Anz = xla_client.ops.ConstantLiteral(c, np.int32(_Anz))
-    n_col = xla_client.ops.ConstantLiteral(c, np.int32(_n_col))
-    n_rhs = xla_client.ops.ConstantLiteral(c, np.int32(_n_rhs))
-    n_lhs = xla_client.ops.ConstantLiteral(c, np.int32(_n_lhs))
-    Anz_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
-    n_col_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
-    n_lhs_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
-    n_rhs_shape = xla_client.Shape.array_shape(np.dtype(np.int32), (), ())
-    result = xla_client.ops.CustomCallWithLayout(
-        c,
-        primitive_name,
-        operands=(n_col, n_lhs, n_rhs, Anz, Ai, Aj, Ax, b),
-        operand_shapes_with_layout=(
-            n_col_shape,
-            n_lhs_shape,
-            n_rhs_shape,
-            Anz_shape,
-            Ai_shape,
-            Aj_shape,
-            Ax_shape,
-            b_shape,
-        ),
-        shape_with_layout=b_shape,
-    )
-    result = xla_client.ops.Reshape(result, (_n_lhs, _n_rhs, _n_col))
-    result = xla_client.ops.Transpose(result, (0, 2, 1))
-    if _n_lhs_list:
-        result = xla_client.ops.Reshape(result, (_n_lhs, _n_col, *_n_rhs_list))
-    else:
-        result = xla_client.ops.Reshape(result, (_n_col, *_n_rhs_list))
-    return result
 
 
 # Forward Gradients ===================================================================
@@ -312,91 +419,40 @@ def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
     if aAx is not None and ab is not None:
         assert isinstance(aAx, int) and isinstance(ab, int)
         n_lhs = Ax.shape[aAx]
-        if ab != 0:
-            Ax = jnp.moveaxis(Ax, aAx, 0)
-        if ab != 0:
-            b = jnp.moveaxis(b, ab, 0)
+        Ax = jnp.moveaxis(Ax, aAx, 0)  # treat as lhs
+        b = jnp.moveaxis(b, ab, 0)  # treat as lhs
         result = operation(Ai, Aj, Ax, b)
         return result, 0
 
     if ab is None:
         assert isinstance(aAx, int)
         n_lhs = Ax.shape[aAx]
-        if aAx != 0:
-            Ax = jnp.moveaxis(Ax, aAx, 0)
+        Ax = jnp.moveaxis(Ax, aAx, 0)  # treat as lhs
         b = jnp.broadcast_to(b[None], (Ax.shape[0], *b.shape))
         result = operation(Ai, Aj, Ax, b)
         return result, 0
 
     if aAx is None:
         assert isinstance(ab, int)
-        if ab != 0:
-            b = jnp.moveaxis(b, ab, 0)
-        n_lhs, n_col, *n_rhs_list = b.shape
-        n_rhs = np.prod(np.array(n_rhs_list, dtype=np.int32))
-        b = b.reshape(n_lhs, n_col, n_rhs).transpose((1, 0, 2)).reshape(n_col, -1)
+        _log(f"vmap: {b.shape=}")
+        b = jnp.moveaxis(b, ab, -1)  # treat as rhs
+        _log(f"vmap: {b.shape=}")
+        shape = b.shape
+        if b.ndim == 0:
+            b = b[None, None, None]
+        elif b.ndim == 1:
+            b = b[None, None, :]
+        elif b.ndim == 2:
+            b = b[None, :, :]
+        elif b.ndim == 3:
+            b = b[:, :, :]
+
+        b = b.reshape(b.shape[0], b.shape[1], -1)
+
+        _log(f"vmap: {b.shape=}")
+        # b is now guarenteed to have shape (n_lhs, n_col, n_rhs)
         result = operation(Ai, Aj, Ax, b)
-        result = result.reshape(n_col, n_lhs, *n_rhs_list)
-        return result, 1
+        result = result.reshape(*shape)
+        return result, -1
 
     raise ValueError("invalid arguments for vmap")
-
-
-# Quick Tests =========================================================================
-
-
-if __name__ == "__main__":
-    A = jnp.array(
-        [
-            [2 + 3j, 3, 0, 0, 0],
-            [3, 0, 4, 0, 6],
-            [0, -1, -3, 2, 0],
-            [0, 0, 1, 0, 0],
-            [0, 4, 2, 0, 1],
-        ],
-        dtype=jnp.complex128,
-    )
-    A = jnp.array(
-        [
-            [2, 3, 0, 0, 0],
-            [3, 0, 4, 0, 6],
-            [0, -1, -3, 2, 0],
-            [0, 0, 1, 0, 0],
-            [0, 4, 2, 0, 1],
-        ],
-        dtype=jnp.float64,
-    )
-    b = jnp.array([[8], [45], [-3], [3], [19]], dtype=jnp.float64)
-    b = jnp.array([[8, 7], [45, 44], [-3, -4], [3, 2], [19, 18]], dtype=jnp.float64)
-    b = jnp.array([3 + 8j, 8 + 45j, 23 + -3j, -7 - 3j, 13 + 19j], dtype=jnp.complex128)
-    b = jnp.array([8, 45, -3, 3, 19], dtype=jnp.float64)
-    Ai, Aj = jnp.where(abs(A) > 0)
-    Ax = A[Ai, Aj]
-
-    t = time()
-    result = solve(Ai, Aj, Ax, b)
-    print(f"{time()-t:.3e}", result)
-
-    t = time()
-    result = solve(Ai, Aj, Ax, b)
-    print(f"{time()-t:.3e}", result)
-
-    t = time()
-    result = solve(Ai, Aj, Ax, b)
-    print(f"{time()-t:.3e}", result)
-
-    def solve_sum(Ai, Aj, Ax, b):
-        return solve(Ai, Aj, Ax, b).sum()
-
-    solve_sum_grad = jax.grad(solve_sum, 2)
-    t = time()
-    result = solve_sum_grad(Ai, Aj, Ax, b)
-    print(f"{time()-t:.3e}", result)
-
-    def coo_mul_vec_sum(Ai, Aj, Ax, b):
-        return coo_mul_vec(Ai, Aj, Ax, b).sum()
-
-    coo_mul_vec_sum_grad = jax.grad(coo_mul_vec_sum, 3)
-    t = time()
-    result = coo_mul_vec_sum_grad(Ai, Aj, Ax, b)
-    print(f"{time()-t:.3e}", result)

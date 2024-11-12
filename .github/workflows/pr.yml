@@ -1,0 +1,36 @@
+name: pr
+on:
+  pull_request:
+
+jobs:
+  build_wheels:
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    # for a PR we just check if it can build for python=3.12
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Clone Suitesparse
+        run: make suitesparse
+
+      - name: Clone XLA
+        run: make xla
+
+      - name: Clone Pybind11
+        run: make pybind11
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.21.3
+        env:
+          CIBW_ARCHS_MACOS: x86_64 arm64
+          CIBW_ARCHS_LINUX: x86_64
+          CIBW_ARCHS_WINDOWS: AMD64
+          CIBW_BUILD: '*cp312*'
+          CIBW_SKIP: '*-musllinux* pp*'
+          CIBW_BEFORE_TEST: 'pip install pytest'
+          CIBW_TEST_COMMAND: 'python {project}/.github/run_tests.py'

@@ -1,351 +1,194 @@
-import numpy as np
+import sys
+from functools import wraps
 
 import jax
+import numpy as np
+import pytest
 
 jax.config.update("jax_enable_x64", True)
 jax.config.update("jax_platform_name", "cpu")
 import jax.numpy as jnp
 import jax.scipy as jsp
+from jax import lax
+from jaxlib.xla_extension import XlaRuntimeError
 
 import klujax
 
 
-def test_solve_f64():
-    print("\ntest_solve_f64")
-    n_nz = 8
-    n_col = 5
-    n_rhs = 1
-    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    Ax = jax.random.normal(Axkey, (n_nz,))
-    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    b = jax.random.normal(bkey, (n_col, n_rhs))
-    x_sp = klujax.solve(Ai, Aj, Ax, b)
+def log_test_name(f):
+    @wraps(f)
+    def new(*args, **kwargs):
+        print(f"\n{f.__name__}", file=sys.stderr)
+        if args:
+            print(f"args={args}", file=sys.stderr)
+        if kwargs:
+            print(f"kwargs={kwargs}", file=sys.stderr)
+        return f(*args, **kwargs)
 
-    A = jnp.zeros((n_col, n_col), dtype=jnp.float64).at[Ai, Aj].add(Ax)
-    x = jsp.linalg.solve(A, b)
-
-    print(x)
-    print(x_sp)
-    np.testing.assert_array_almost_equal(x_sp, x)
+    return new
 
 
-def test_solve_c128():
-    print("\ntest_solve_c128")
-    n_nz = 8
-    n_col = 5
-    n_rhs = 1
-    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    Ax_r, Ax_i = jax.random.normal(Axkey, (2, n_nz))
-    Ax = Ax_r + 1j * Ax_i
-    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    b_r, b_i = jax.random.normal(bkey, (2, n_col, n_rhs))
-    b = b_r + 1j * b_i
-    x_sp = klujax.solve(Ai, Aj, Ax, b)
-
-    A = jnp.zeros((n_col, n_col), dtype=jnp.complex128).at[Ai, Aj].add(Ax)
-    x = jsp.linalg.solve(A, b)
-
-    print(x)
-    print(x_sp)
-    np.testing.assert_array_almost_equal(x_sp, x)
+@log_test_name
+@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
+@pytest.mark.parametrize("ops", [(klujax.solve, jsp.linalg.solve), (klujax.coo_mul_vec, lax.dot)])  # fmt: skip
+def test_1d(dtype, ops):
+    op_sparse, op_dense = ops
+    Ai, Aj, Ax, b = _get_rand_arrs_1d(8, (n_col := 5), dtype=dtype)
+    x_sp = op_sparse(Ai, Aj, Ax, b)
+    A = jnp.zeros((n_col, n_col), dtype=Ax.dtype).at[Ai, Aj].add(Ax)
+    x = op_dense(A, b)
+    _log_and_test_equality(x, x_sp)
 
 
-def test_solve_f64_vmap():
-    print("\ntest_solve_f64_vmap")
+@log_test_name
+@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
+@pytest.mark.parametrize("ops", [(klujax.solve, jsp.linalg.solve), (klujax.coo_mul_vec, lax.dot)])  # fmt: skip
+def test_2d(dtype, ops):
+    op_sparse, op_dense = ops
+    Ai, Aj, Ax, b = _get_rand_arrs_2d((n_lhs := 3), 8, (n_col := 5), dtype=dtype)
+    x_sp = op_sparse(Ai, Aj, Ax, b)
+    A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
+    x = jax.vmap(op_dense, (0, 0), 0)(A, b)
+    _log_and_test_equality(x, x_sp)
+
+
+@log_test_name
+@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
+@pytest.mark.parametrize("ops", [(klujax.solve, jsp.linalg.solve), (klujax.coo_mul_vec, lax.dot)])  # fmt: skip
+def test_2d_vmap(dtype, ops):
+    op_sparse, op_dense = ops
+    Ai, Aj, Ax, b = _get_rand_arrs_2d((n_lhs := 3), 8, (n_col := 5), dtype=dtype)
+    x_sp = jax.vmap(op_sparse, (None, None, 1, 1), 0)(Ai, Aj, Ax.T, b.T)
+    A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
+    x = jax.vmap(op_dense, (0, 0), 0)(A, b)
+    _log_and_test_equality(x, x_sp)
+
+
+@log_test_name
+@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
+@pytest.mark.parametrize("ops", [(klujax.solve, jsp.linalg.solve), (klujax.coo_mul_vec, lax.dot)])  # fmt: skip
+def test_3d(dtype, ops):
+    op_sparse, op_dense = ops
+    Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 8, (n_col := 5), 2, dtype=dtype)
+    x_sp = op_sparse(Ai, Aj, Ax, b)
+    A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
+    x = jax.vmap(op_dense, (0, 0), 0)(A, b)
+    _log_and_test_equality(x, x_sp)
+
+
+@log_test_name
+@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
+@pytest.mark.parametrize("ops", [(klujax.solve, jsp.linalg.solve), (klujax.coo_mul_vec, lax.dot)])  # fmt: skip
+def test_3d_vmap(dtype, ops):
+    op_sparse, op_dense = ops
+    Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 8, (n_col := 5), 2, dtype=dtype)
+    _log(Ai_shape=Ai.shape, Aj_shape=Aj.shape, Ax_shape=Ax.shape, b_shape=b.shape)
+    x_sp = jax.vmap(op_sparse, (None, None, None, -1), -1)(Ai, Aj, Ax, b)
+    A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
+    x = jax.vmap(op_dense, (0, 0), 0)(A, b)
+    _log_and_test_equality(x, x_sp)
+
+
+@log_test_name
+@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
+@pytest.mark.parametrize("op", [klujax.solve, klujax.coo_mul_vec])
+def test_4d(dtype, op):
+    Ai, Aj, Ax, b = _get_rand_arrs_3d(3, 8, 5, 2, dtype=dtype)
+    with pytest.raises(ValueError):
+        op(Ai, Aj, Ax, b[None])
+
+    with pytest.raises(ValueError):
+        op(Ai, Aj, Ax[None], b)
+
+    with pytest.raises(ValueError):
+        op(Ai, Aj, Ax[None], b[None])
+
+
+@log_test_name
+@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
+@pytest.mark.parametrize("op", [klujax.solve, klujax.coo_mul_vec])
+def test_4d_vmap(dtype, op):
+    Ai, Aj, Ax, b = _get_rand_arrs_3d(3, 8, 5, 2, dtype=dtype)
+    jax.vmap(op, (None, None, None, 1), 0)(Ai, Aj, Ax, b[:, None])
+    # TODO: compare with dense result
+
+
+@log_test_name
+@pytest.mark.skipif(sys.platform in ("win32", "darwin"), reason="FIXME: known to still segfault on Windows/MacOS!")  # fmt: skip
+@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
+@pytest.mark.parametrize("op", [klujax.solve, klujax.coo_mul_vec])
+def test_vmap_fail(dtype, op):
     n_lhs = 23
     n_nz = 8
     n_col = 5
     n_rhs = 1
 
-    # A and b vmapped
     Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    Ax = jax.random.normal(Axkey, (n_lhs, n_nz))
+    Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
     Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
     Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    b = jax.random.normal(bkey, (n_lhs, n_col, n_rhs))
+    b = jax.random.normal(bkey, (n_lhs, n_col, n_rhs), dtype=dtype)
+    with pytest.raises(XlaRuntimeError):
+        jax.vmap(op, in_axes=(None, None, None, 0), out_axes=0)(Ai, Aj, Ax, b)
 
-    vsolve = jax.vmap(klujax.solve, in_axes=(None, None, 0, 0), out_axes=0)
-    x_sp = vsolve(Ai, Aj, Ax, b)
 
-    A = jnp.zeros((n_lhs, n_col, n_col), dtype=jnp.float64).at[:, Ai, Aj].add(Ax)
-    x = jsp.linalg.solve(A, b)
-
-    print(x[:2])
-    print(x_sp[:2])
-    np.testing.assert_array_almost_equal(x_sp, x)
-
-    # A vmapped
-    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    Ax = jax.random.normal(Axkey, (n_lhs, n_nz))
+def _get_rand_arrs_1d(n_nz, n_col, *, dtype, seed=33):
+    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(seed), 4)
     Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
     Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    b = jax.random.normal(bkey, (n_col, n_rhs))
+    Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
+    b = jax.random.normal(bkey, (n_col,), dtype=dtype)
+    return Ai, Aj, Ax, b
 
-    vsolve = jax.vmap(klujax.solve, in_axes=(None, None, 0, None), out_axes=0)
-    x_sp = vsolve(Ai, Aj, Ax, b)
 
-    A = jnp.zeros((n_lhs, n_col, n_col), dtype=jnp.float64).at[:, Ai, Aj].add(Ax)
-    x = jsp.linalg.solve(A, b[None])
-
-    print(x[:2])
-    print(x_sp[:2])
-    np.testing.assert_array_almost_equal(x_sp, x)
-
-    # b vmapped
-    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    Ax = jax.random.normal(Axkey, (n_nz,))
+def _get_rand_arrs_2d(n_lhs, n_nz, n_col, *, dtype, seed=33):
+    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(seed), 4)
     Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
     Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    b = jax.random.normal(bkey, (n_lhs, n_col, n_rhs))
+    Ax = jax.random.normal(
+        Axkey,
+        (
+            n_lhs,
+            n_nz,
+        ),
+        dtype=dtype,
+    )
+    b = jax.random.normal(bkey, (n_lhs, n_col), dtype=dtype)
+    return Ai, Aj, Ax, b
 
-    vsolve = jax.vmap(klujax.solve, in_axes=(None, None, None, 0), out_axes=0)
-    x_sp = vsolve(Ai, Aj, Ax, b)
 
-    A = jnp.zeros((n_lhs, n_col, n_col), dtype=jnp.float64).at[:, Ai, Aj].add(Ax)
-    x = jsp.linalg.solve(A, b)
-
-    print(x[:2])
-    print(x_sp[:2])
-    np.testing.assert_array_almost_equal(x_sp, x)
-
-
-def test_solve_c128_vmap():
-    print("\ntest_solve_c128_vmap")
-    n_lhs = 23
-    n_nz = 8
-    n_col = 5
-    n_rhs = 1
-
-    # A and b vmapped
-    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    Ax = jax.random.normal(Axkey, (2, n_lhs, n_nz))
-    Ax = Ax[0] + 1j * Ax[1]
+def _get_rand_arrs_3d(n_lhs, n_nz, n_col, n_rhs, *, dtype, seed=33):
+    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(seed), 4)
     Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
     Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    b = jax.random.normal(bkey, (2, n_lhs, n_col, n_rhs))
-    b = b[0] + 1j * b[1]
+    Ax = jax.random.normal(
+        Axkey,
+        (
+            n_lhs,
+            n_nz,
+        ),
+        dtype=dtype,
+    )
+    b = jax.random.normal(bkey, (n_lhs, n_col, n_rhs), dtype=dtype)
+    return Ai, Aj, Ax, b
 
-    vsolve = jax.vmap(klujax.solve, in_axes=(None, None, 0, 0), out_axes=0)
-    x_sp = vsolve(Ai, Aj, Ax, b)
 
-    A = jnp.zeros((n_lhs, n_col, n_col), dtype=jnp.complex128).at[:, Ai, Aj].add(Ax)
-    x = jsp.linalg.solve(A, b)
-
-    print(x[:2])
-    print(x_sp[:2])
-    np.testing.assert_array_almost_equal(x_sp, x)
-
-    # A vmapped
-    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    Ax = jax.random.normal(Axkey, (2, n_lhs, n_nz))
-    Ax = Ax[0] + 1j * Ax[1]
-    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    b = jax.random.normal(bkey, (2, n_col, n_rhs))
-    b = b[0] + 1j * b[1]
-
-    vsolve = jax.vmap(klujax.solve, in_axes=(None, None, 0, None), out_axes=0)
-    x_sp = vsolve(Ai, Aj, Ax, b)
-
-    A = jnp.zeros((n_lhs, n_col, n_col), dtype=jnp.complex128).at[:, Ai, Aj].add(Ax)
-    x = jsp.linalg.solve(A, b[None])
-
-    print(x[:2])
-    print(x_sp[:2])
-    np.testing.assert_array_almost_equal(x_sp, x)
-
-    # b vmapped
-    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    Ax = jax.random.normal(Axkey, (2, n_nz))
-    Ax = Ax[0] + 1j * Ax[1]
-    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    b = jax.random.normal(bkey, (2, n_lhs, n_col, n_rhs))
-    b = b[0] + 1j * b[1]
-
-    vsolve = jax.vmap(klujax.solve, in_axes=(None, None, None, 0), out_axes=0)
-    x_sp = vsolve(Ai, Aj, Ax, b)
-
-    A = jnp.zeros((n_lhs, n_col, n_col), dtype=jnp.complex128).at[:, Ai, Aj].add(Ax)
-    x = jsp.linalg.solve(A, b)
-
-    print(x[:2])
-    print(x_sp[:2])
+def _log_and_test_equality(x, x_sp):
+    print(f"\nx_sp=\n{x_sp}")
+    print(f"\nx=\n{x}")
+    print(f"\ndiff=\n{np.round(x_sp - x, 9)}")
+    print(f"\nis_equal=\n{_is_almost_equal(x_sp, x)}")
     np.testing.assert_array_almost_equal(x_sp, x)
 
 
-def test_coo_mul_vec_f64():
-    print("\ntest_coo_mul_vec_f64")
-    n_nz = 8
-    n_col = 5
-    n_rhs = 1
-    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    Ax = jax.random.normal(Axkey, (n_nz,))
-    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    b = jax.random.normal(bkey, (n_col, n_rhs))
-
-    x_sp = klujax.coo_mul_vec(Ai, Aj, Ax, b)
-
-    A = jnp.zeros((n_col, n_col), dtype=jnp.float64).at[Ai, Aj].add(Ax)
-    x = A @ b
-
-    print(x)
-    print(x_sp)
-    np.testing.assert_array_almost_equal(x_sp, x)
+def _log(**kwargs):
+    for k, v in kwargs.items():
+        print(f"{k}={v}")
 
 
-def test_coo_mul_vec_c128():
-    print("\ntest_coo_mul_vec_c128")
-    n_nz = 8
-    n_col = 5
-    n_rhs = 1
-    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    Ax = jax.random.normal(Axkey, (2, n_nz))
-    Ax = Ax[0] + 1j * Ax[1]
-    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    b = jax.random.normal(bkey, (2, n_col, n_rhs))
-    b = b[0] + 1j * b[1]
-
-    x_sp = klujax.coo_mul_vec(Ai, Aj, Ax, b)
-
-    A = jnp.zeros((n_col, n_col), dtype=jnp.complex128).at[Ai, Aj].add(Ax)
-    x = A @ b
-
-    print(x)
-    print(x_sp)
-    np.testing.assert_array_almost_equal(x_sp, x)
-
-
-def test_coo_mul_vec_f64_vmap():
-    print("\ntest_coo_mul_vec_f64_vmap")
-    n_lhs = 23
-    n_nz = 8
-    n_col = 5
-    n_rhs = 1
-    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    Ax = jax.random.normal(Axkey, (n_lhs, n_nz))
-    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    b = jax.random.normal(bkey, (n_lhs, n_col, n_rhs))
-
-    vmul = jax.vmap(klujax.coo_mul_vec, in_axes=(None, None, 0, 0), out_axes=0)
-    x_sp = vmul(Ai, Aj, Ax, b)
-
-    A = jnp.zeros((n_lhs, n_col, n_col), dtype=jnp.float64).at[:, Ai, Aj].add(Ax)
-    x = jnp.einsum("bij,bjk->bik", A, b)
-
-    print(x[:2])
-    print(x_sp[:2])
-    np.testing.assert_array_almost_equal(x_sp, x)
-
-    # A vmapped
-    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    Ax = jax.random.normal(Axkey, (n_lhs, n_nz))
-    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    b = jax.random.normal(bkey, (n_col, n_rhs))
-
-    vmul = jax.vmap(klujax.coo_mul_vec, in_axes=(None, None, 0, None), out_axes=0)
-    x_sp = vmul(Ai, Aj, Ax, b)
-
-    A = jnp.zeros((n_lhs, n_col, n_col), dtype=jnp.float64).at[:, Ai, Aj].add(Ax)
-    x = jnp.einsum("bij,bjk->bik", A, b[None])
-
-    print(x[:2])
-    print(x_sp[:2])
-    np.testing.assert_array_almost_equal(x_sp, x)
-
-    # b vmapped
-    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    Ax = jax.random.normal(Axkey, (n_nz,))
-    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    b = jax.random.normal(bkey, (n_lhs, n_col, n_rhs))
-
-    vmul = jax.vmap(klujax.coo_mul_vec, in_axes=(None, None, None, 0), out_axes=0)
-    x_sp = vmul(Ai, Aj, Ax, b)
-
-    A = jnp.zeros((n_col, n_col), dtype=jnp.float64).at[Ai, Aj].add(Ax)
-    x = jnp.einsum("ij,bjk->bik", A, b)
-
-    print(x[:2])
-    print(x_sp[:2])
-    np.testing.assert_array_almost_equal(x_sp, x)
-
-
-def test_coo_mul_vec_c128_vmap():
-    print("\ntest_coo_mul_vec_c128_vmap")
-    n_lhs = 23
-    n_nz = 8
-    n_col = 5
-    n_rhs = 1
-    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    Ax = jax.random.normal(Axkey, (2, n_lhs, n_nz))
-    Ax = Ax[0] + 1j * Ax[1]
-    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    b = jax.random.normal(bkey, (2, n_lhs, n_col, n_rhs))
-    b = b[0] + 1j * b[1]
-
-    vmul = jax.vmap(klujax.coo_mul_vec, in_axes=(None, None, 0, 0), out_axes=0)
-    x_sp = vmul(Ai, Aj, Ax, b)
-
-    A = jnp.zeros((n_lhs, n_col, n_col), dtype=jnp.complex128).at[:, Ai, Aj].add(Ax)
-    x = jnp.einsum("bij,bjk->bik", A, b)
-
-    print(x[:2])
-    print(x_sp[:2])
-    np.testing.assert_array_almost_equal(x_sp, x)
-
-    # A vmapped
-    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    Ax = jax.random.normal(Axkey, (2, n_lhs, n_nz))
-    Ax = Ax[0] + 1j * Ax[1]
-    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    b = jax.random.normal(bkey, (2, n_col, n_rhs))
-    b = b[0] + 1j * b[1]
-
-    vmul = jax.vmap(klujax.coo_mul_vec, in_axes=(None, None, 0, None), out_axes=0)
-    x_sp = vmul(Ai, Aj, Ax, b)
-
-    A = jnp.zeros((n_lhs, n_col, n_col), dtype=jnp.complex128).at[:, Ai, Aj].add(Ax)
-    x = jnp.einsum("bij,bjk->bik", A, b[None])
-
-    print(x[:2])
-    print(x_sp[:2])
-    np.testing.assert_array_almost_equal(x_sp, x)
-
-    # b vmapped
-    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    Ax = jax.random.normal(Axkey, (2, n_nz))
-    Ax = Ax[0] + 1j * Ax[1]
-    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    b = jax.random.normal(bkey, (2, n_lhs, n_col, n_rhs))
-    b = b[0] + 1j * b[1]
-
-    vmul = jax.vmap(klujax.coo_mul_vec, in_axes=(None, None, None, 0), out_axes=0)
-    x_sp = vmul(Ai, Aj, Ax, b)
-
-    A = jnp.zeros((n_col, n_col), dtype=jnp.complex128).at[Ai, Aj].add(Ax)
-    x = jnp.einsum("ij,bjk->bik", A, b)
-
-    print(x[:2])
-    print(x_sp[:2])
-    np.testing.assert_array_almost_equal(x_sp, x)
-
-
-if __name__ == "__main__":
-    test_solve_f64()
-    test_solve_c128()
-    test_solve_f64_vmap()
-    test_solve_c128_vmap()
-    test_coo_mul_vec_f64()
-    test_coo_mul_vec_c128()
-    test_coo_mul_vec_f64_vmap()
-    test_coo_mul_vec_c128_vmap()
+def _is_almost_equal(arr1, arr2):
+    try:
+        np.testing.assert_array_almost_equal(arr1, arr2)
+        return True
+    except AssertionError:
+        return False

@@ -17,11 +17,13 @@ jobs:
       - uses: actions/checkout@v3
 
       - name: Clone Suitesparse
-        run: git clone --depth 1 --branch v7.2.0 https://github.com/DrTimothyAldenDavis/SuiteSparse suitesparse
+        run: make suitesparse
 
-      - name: Clone Pybind
-        run: |
-          git clone --depth 1 --branch stable https://github.com/pybind/pybind11 pybind11
+      - name: Clone XLA
+        run: make xla
+
+      - name: Clone Pybind11
+        run: make pybind11
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.21.3
@@ -30,6 +32,8 @@ jobs:
           CIBW_ARCHS_LINUX: x86_64
           CIBW_ARCHS_WINDOWS: AMD64
           CIBW_SKIP: '*-musllinux* pp*'
+          CIBW_BEFORE_TEST: 'pip install pytest'
+          CIBW_TEST_COMMAND: 'pytest tests.py'
 
       - uses: actions/upload-artifact@v3
         with:

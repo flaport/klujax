@@ -1,17 +1,17 @@
-// version: 0.2.10
-// author: Floris Laporte
 
-#include <iostream>
-#include <vector>
+// Imports
 
-#include <klu.h>
-#include <pybind11/pybind11.h>
-
+#include "klu.h"
+#include "pybind11/pybind11.h"
+#include "xla/ffi/api/ffi.h"
+#include <cmath>
 namespace py = pybind11;
+namespace ffi = xla::ffi;
 
-void coo_to_csc_analyze(int n_col, int n_nz, int *Ai, int *Aj, int *Bi, int *Bp,
-                        int *Bk) {
+// Helper functions
 
+bool _coo_to_csc_analyze(int n_col, int n_nz, int *Ai, int *Aj, int *Bi,
+                         int *Bp, int *Bk) {
   // compute number of non-zero entries per row of A
   for (int n = 0; n < n_nz; n++) {
     Bp[Aj[n]] += 1;
@@ -26,12 +26,18 @@ void coo_to_csc_analyze(int n_col, int n_nz, int *Ai, int *Aj, int *Bi, int *Bp,
     cumsum += temp;
   }
 
-  // write Ai, Ax into Bi, Bk
+  // write Ai, Aj into Bi, Bk
   int col = 0;
   int dest = 0;
   for (int n = 0; n < n_nz; n++) {
+    if (Aj[n] >= n_col) {
+      return false;
+    }
     col = Aj[n];
     dest = Bp[col];
+    if (Ai[n] >= n_col) {
+      return false;
+    }
     Bi[dest] = Ai[n];
     Bk[dest] = n;
     Bp[col] += 1;
@@ -43,30 +49,52 @@ void coo_to_csc_analyze(int n_col, int n_nz, int *Ai, int *Aj, int *Bi, int *Bp,
     Bp[i] = last;
     last = temp;
   }
+  return true;
 }
 
-void solve_f64(void *out, void **in) {
+// Implementations
+
+ffi::Error _solve_f64(ffi::Buffer<ffi::DataType::S32> buf_Ai,
+                      ffi::Buffer<ffi::DataType::S32> buf_Aj,
+                      ffi::Buffer<ffi::DataType::F64> buf_Ax,
+                      ffi::Buffer<ffi::DataType::F64> buf_b,
+                      ffi::Result<ffi::Buffer<ffi::DataType::F64>> buf_x) {
+
   // get args
-  int n_col = *reinterpret_cast<int *>(in[0]);
-  int n_lhs = *reinterpret_cast<int *>(in[1]);
-  int n_rhs = *reinterpret_cast<int *>(in[2]);
-  int Anz = *reinterpret_cast<int *>(in[3]);
-  int *Ai = reinterpret_cast<int *>(in[4]);
-  int *Aj = reinterpret_cast<int *>(in[5]);
-  double *Ax = reinterpret_cast<double *>(in[6]);
-  double *b = reinterpret_cast<double *>(in[7]);
-  double *result = reinterpret_cast<double *>(out);
+  int *Ai = buf_Ai.typed_data();
+  int *Aj = buf_Aj.typed_data();
+  double *Ax = buf_Ax.typed_data();
+  double *b = buf_b.typed_data();
+  double *x = buf_x->typed_data();
+  int n_lhs = (int)buf_Ax.dimensions()[0];
+  int n_nz = (int)buf_Ax.dimensions()[1];
+  int n_rhs = (int)buf_x->dimensions()[1];
+  int n_col = (int)buf_x->dimensions()[2];
 
   // copy b into result
   for (int i = 0; i < n_lhs * n_col * n_rhs; i++) {
-    result[i] = b[i];
+    x[i] = b[i];
   }
 
   // get COO -> CSC transformation information
-  int *Bk = new int[Anz](); // Ax -> Bx transformation indices
-  int *Bi = new int[Anz]();
+  int *Bk = new int[n_nz](); // Ax -> Bx transformation indices
+  int *Bi = new int[n_nz]();
   int *Bp = new int[n_col + 1]();
-  coo_to_csc_analyze(n_col, Anz, Ai, Aj, Bi, Bp, Bk);
+  double *Bx = new double[n_nz]();
+
+  bool is_valid = _coo_to_csc_analyze(n_col, n_nz, Ai, Aj, Bi, Bp, Bk);
+  if (!is_valid) {
+    delete[] Bk;
+    delete[] Bi;
+    delete[] Bp;
+    delete[] Bx;
+    return ffi::Error::InvalidArgument(
+        "max(Ai, Aj) >= n_col. Broadcasted shapes: Ax: (n_lhs=" +
+        std::to_string(n_lhs) + ", n_nz=" + std::to_string(n_nz) +
+        "); b: (n_lhs=" + std::to_string(n_lhs) + ", n_col=" +
+        std::to_string(n_col) + ", n_rhs=" + std::to_string(n_rhs) +
+        "). You might want to transpose b?");
+  }
 
   // initialize KLU for given sparsity pattern
   klu_symbolic *Symbolic;
@@ -77,19 +105,18 @@ void solve_f64(void *out, void **in) {
 
   // solve for other elements in batch:
   // NOTE: same sparsity pattern for each element in batch assumed
-  double *Bx = new double[Anz]();
   for (int i = 0; i < n_lhs; i++) {
-    int m = i * Anz;
+    int m = i * n_nz;
     int n = i * n_rhs * n_col;
 
     // convert COO Ax to CSC Bx
-    for (int k = 0; k < Anz; k++) {
+    for (int k = 0; k < n_nz; k++) {
       Bx[k] = Ax[m + Bk[k]];
     }
 
     // solve using KLU
     Numeric = klu_factor(Bp, Bi, Bx, Symbolic, &Common);
-    klu_solve(Symbolic, Numeric, n_col, n_rhs, &result[n], &Common);
+    klu_solve(Symbolic, Numeric, n_col, n_rhs, &x[n], &Common);
   }
 
   // clean up
@@ -99,30 +126,94 @@ void solve_f64(void *out, void **in) {
   delete[] Bi;
   delete[] Bp;
   delete[] Bx;
+
+  return ffi::Error::Success();
 }
 
-void solve_c128(void *out, void **in) {
+ffi::Error
+_coo_mul_vec_f64(ffi::Buffer<ffi::DataType::S32> buf_Ai,
+                 ffi::Buffer<ffi::DataType::S32> buf_Aj,
+                 ffi::Buffer<ffi::DataType::F64> buf_Ax,
+                 ffi::Buffer<ffi::DataType::F64> buf_x,
+                 ffi::Result<ffi::Buffer<ffi::DataType::F64>> buf_b) {
+
   // get args
-  int n_col = *reinterpret_cast<int *>(in[0]);
-  int n_lhs = *reinterpret_cast<int *>(in[1]);
-  int n_rhs = *reinterpret_cast<int *>(in[2]);
-  int Anz = *reinterpret_cast<int *>(in[3]);
-  int *Ai = reinterpret_cast<int *>(in[4]);
-  int *Aj = reinterpret_cast<int *>(in[5]);
-  double *Ax = reinterpret_cast<double *>(in[6]);
-  double *b = reinterpret_cast<double *>(in[7]);
-  double *result = reinterpret_cast<double *>(out);
+  int *Ai = buf_Ai.typed_data();
+  int *Aj = buf_Aj.typed_data();
+  double *Ax = buf_Ax.typed_data();
+  double *x = buf_x.typed_data();
+  double *b = buf_b->typed_data();
+  int n_lhs = (int)buf_Ax.dimensions()[0];
+  int n_nz = (int)buf_Ax.dimensions()[1];
+  int n_rhs = (int)buf_b->dimensions()[1];
+  int n_col = (int)buf_b->dimensions()[2];
+
+  // initialize empty result
+  for (int i = 0; i < n_lhs * n_col * n_rhs; i++) {
+    b[i] = 0.0;
+  }
+
+  // fill result
+  for (int k = 0; k < n_nz; k++) {
+    if (Ai[k] >= n_col || Aj[k] >= n_col) {
+      return ffi::Error::InvalidArgument(
+          "max(Ai, Aj) >= n_col. Broadcasted shapes: Ax: (n_lhs=" +
+          std::to_string(n_lhs) + ", n_nz=" + std::to_string(n_nz) +
+          "); b: (n_lhs=" + std::to_string(n_lhs) + ", n_col=" +
+          std::to_string(n_col) + ", n_rhs=" + std::to_string(n_rhs) +
+          "). You might want to transpose b?");
+    }
+    for (int i = 0; i < n_lhs; i++) {
+      int m = i * n_nz;
+      int n = i * n_rhs * n_col;
+      for (int j = 0; j < n_rhs; j++) {
+        b[n + Ai[k] + j * n_col] += Ax[m + k] * x[n + Aj[k] + j * n_col];
+      }
+    }
+  }
+  return ffi::Error::Success();
+}
+
+ffi::Error _solve_c128(ffi::Buffer<ffi::DataType::S32> buf_Ai,
+                       ffi::Buffer<ffi::DataType::S32> buf_Aj,
+                       ffi::Buffer<ffi::DataType::C128> buf_Ax,
+                       ffi::Buffer<ffi::DataType::C128> buf_b,
+                       ffi::Result<ffi::Buffer<ffi::DataType::C128>> buf_x) {
+
+  // get args
+  int *Ai = buf_Ai.typed_data();
+  int *Aj = buf_Aj.typed_data();
+  double *Ax = (double *)buf_Ax.typed_data();
+  double *b = (double *)buf_b.typed_data();
+  double *x = (double *)buf_x->typed_data();
+  int n_lhs = (int)buf_Ax.dimensions()[0];
+  int n_nz = (int)buf_Ax.dimensions()[1];
+  int n_rhs = (int)buf_x->dimensions()[1];
+  int n_col = (int)buf_x->dimensions()[2];
 
   // copy b into result
   for (int i = 0; i < 2 * n_lhs * n_col * n_rhs; i++) {
-    result[i] = b[i];
+    x[i] = b[i];
   }
 
   // get COO -> CSC transformation information
-  int *Bk = new int[Anz]();       // Ax -> Bx transformation indices
-  int *Bi = new int[Anz]();       // CSC row indices
+  int *Bk = new int[n_nz]();      // Ax -> Bx transformation indices
+  int *Bi = new int[n_nz]();      // CSC row indices
   int *Bp = new int[n_col + 1](); // CSC column pointers
-  coo_to_csc_analyze(n_col, Anz, Ai, Aj, Bi, Bp, Bk);
+  double *Bx = new double[2 * n_nz]();
+  bool is_valid = _coo_to_csc_analyze(n_col, n_nz, Ai, Aj, Bi, Bp, Bk);
+  if (!is_valid) {
+    delete[] Bk;
+    delete[] Bi;
+    delete[] Bp;
+    delete[] Bx;
+    return ffi::Error::InvalidArgument(
+        "max(Ai, Aj) >= n_col. Broadcasted shapes: Ax: (n_lhs=" +
+        std::to_string(n_lhs) + ", n_nz=" + std::to_string(n_nz) +
+        "); b: (n_lhs=" + std::to_string(n_lhs) + ", n_col=" +
+        std::to_string(n_col) + ", n_rhs=" + std::to_string(n_rhs) +
+        "). You might want to transpose b?");
+  }
 
   // initialize KLU for given sparsity pattern
   klu_symbolic *Symbolic;
@@ -133,20 +224,19 @@ void solve_c128(void *out, void **in) {
 
   // solve for other elements in batch:
   // NOTE: same sparsity pattern for each element in batch assumed
-  double *Bx = new double[2 * Anz]();
   for (int i = 0; i < n_lhs; i++) {
-    int m = 2 * i * Anz;
+    int m = 2 * i * n_nz;
     int n = 2 * i * n_rhs * n_col;
 
     // convert COO Ax to CSC Bx
-    for (int k = 0; k < Anz; k++) {
+    for (int k = 0; k < n_nz; k++) {
       Bx[2 * k] = Ax[m + 2 * Bk[k]];
       Bx[2 * k + 1] = Ax[m + 2 * Bk[k] + 1];
     }
 
     // solve using KLU
     Numeric = klu_z_factor(Bp, Bi, Bx, Symbolic, &Common);
-    klu_z_solve(Symbolic, Numeric, n_col, n_rhs, &result[n], &Common);
+    klu_z_solve(Symbolic, Numeric, n_col, n_rhs, &x[n], &Common);
   }
 
   // clean up
@@ -156,99 +246,108 @@ void solve_c128(void *out, void **in) {
   delete[] Bi;
   delete[] Bp;
   delete[] Bx;
+
+  return ffi::Error::Success();
 }
 
-void coo_mul_vec_f64(void *out, void **in) {
+ffi::Error
+_coo_mul_vec_c128(ffi::Buffer<ffi::DataType::S32> buf_Ai,
+                  ffi::Buffer<ffi::DataType::S32> buf_Aj,
+                  ffi::Buffer<ffi::DataType::C128> buf_Ax,
+                  ffi::Buffer<ffi::DataType::C128> buf_x,
+                  ffi::Result<ffi::Buffer<ffi::DataType::C128>> buf_b) {
+
   // get args
-  int n_col = *reinterpret_cast<int *>(in[0]);
-  int n_lhs = *reinterpret_cast<int *>(in[1]);
-  int n_rhs = *reinterpret_cast<int *>(in[2]);
-  int Anz = *reinterpret_cast<int *>(in[3]);
-  int *Ai = reinterpret_cast<int *>(in[4]);
-  int *Aj = reinterpret_cast<int *>(in[5]);
-  double *Ax = reinterpret_cast<double *>(in[6]);
-  double *b = reinterpret_cast<double *>(in[7]);
-  double *result = reinterpret_cast<double *>(out);
-
-  // initialize empty result
-  for (int i = 0; i < n_lhs * n_col * n_rhs; i++) {
-    result[i] = 0.0;
-  }
-
-  // fill result
-  for (int i = 0; i < n_lhs; i++) {
-    int m = i * Anz;
-    int n = i * n_rhs * n_col;
-    for (int j = 0; j < n_rhs; j++) {
-      for (int k = 0; k < Anz; k++) {
-        result[n + Ai[k] + j * n_col] += Ax[m + k] * b[n + Aj[k] + j * n_col];
-      }
-    }
-  }
-}
-
-void coo_mul_vec_c128(void *out, void **in) {
-  // get args
-  int n_col = *reinterpret_cast<int *>(in[0]);
-  int n_lhs = *reinterpret_cast<int *>(in[1]);
-  int n_rhs = *reinterpret_cast<int *>(in[2]);
-  int Anz = *reinterpret_cast<int *>(in[3]);
-  int *Ai = reinterpret_cast<int *>(in[4]);
-  int *Aj = reinterpret_cast<int *>(in[5]);
-  double *Ax = reinterpret_cast<double *>(in[6]);
-  double *b = reinterpret_cast<double *>(in[7]);
-  double *result = reinterpret_cast<double *>(out);
+  int *Ai = buf_Ai.typed_data();
+  int *Aj = buf_Aj.typed_data();
+  double *Ax = (double *)buf_Ax.typed_data();
+  double *x = (double *)buf_x.typed_data();
+  double *b = (double *)buf_b->typed_data();
+  int n_lhs = (int)buf_Ax.dimensions()[0];
+  int n_nz = (int)buf_Ax.dimensions()[1];
+  int n_rhs = (int)buf_b->dimensions()[1];
+  int n_col = (int)buf_b->dimensions()[2];
 
   // initialize empty result
   for (int i = 0; i < 2 * n_lhs * n_col * n_rhs; i++) {
-    result[i] = 0.0;
+    b[i] = 0.0;
   }
-
   // fill result
-  for (int i = 0; i < n_lhs; i++) {
-    int m = 2 * i * Anz;
-    int n = 2 * i * n_rhs * n_col;
-    for (int j = 0; j < n_rhs; j++) {
-      for (int k = 0; k < Anz; k++) {
-        result[n + 2 * (Ai[k] + j * n_col)] +=               // real part
-            Ax[m + 2 * k] * b[n + 2 * (Aj[k] + j * n_col)] - // real * real
+  for (int k = 0; k < n_nz; k++) {
+    if (Ai[k] >= n_col || Aj[k] >= n_col) {
+      return ffi::Error::InvalidArgument(
+          "max(Ai, Aj) >= n_col. Broadcasted shapes: Ax: (n_lhs=" +
+          std::to_string(n_lhs) + ", n_nz=" + std::to_string(n_nz) +
+          "); b: (n_lhs=" + std::to_string(n_lhs) + ", n_col=" +
+          std::to_string(n_col) + ", n_rhs=" + std::to_string(n_rhs) +
+          "). You might want to transpose b?");
+    }
+    for (int i = 0; i < n_lhs; i++) {
+      int m = 2 * i * n_nz;
+      int n = 2 * i * n_rhs * n_col;
+      for (int j = 0; j < n_rhs; j++) {
+        b[n + 2 * (Ai[k] + j * n_col)] +=                    // real part
+            Ax[m + 2 * k] * x[n + 2 * (Aj[k] + j * n_col)] - // real * real
             Ax[m + 2 * k + 1] *
-                b[n + 2 * (Aj[k] + j * n_col) + 1];              // imag * imag
-        result[n + 2 * (Ai[k] + j * n_col) + 1] +=               // imag part
-            Ax[m + 2 * k] * b[n + 2 * (Aj[k] + j * n_col) + 1] + // real * imag
-            Ax[m + 2 * k + 1] * b[n + 2 * (Aj[k] + j * n_col)];  // imag * real
+                x[n + 2 * (Aj[k] + j * n_col) + 1];              // imag * imag
+        b[n + 2 * (Ai[k] + j * n_col) + 1] +=                    // imag part
+            Ax[m + 2 * k] * x[n + 2 * (Aj[k] + j * n_col) + 1] + // real * imag
+            Ax[m + 2 * k + 1] * x[n + 2 * (Aj[k] + j * n_col)];  // imag * real
       }
     }
   }
+  return ffi::Error::Success();
 }
 
+// XLA wrappers
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL( // A x = b
+    solve_f64, _solve_f64,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::S32>>() // Ai
+        .Arg<ffi::Buffer<ffi::DataType::S32>>() // Aj
+        .Arg<ffi::Buffer<ffi::DataType::F64>>() // Ax
+        .Arg<ffi::Buffer<ffi::DataType::F64>>() // b
+        .Ret<ffi::Buffer<ffi::DataType::F64>>() // x
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL( // b = A x
+    coo_mul_vec_f64, _coo_mul_vec_f64,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::S32>>() // Ai
+        .Arg<ffi::Buffer<ffi::DataType::S32>>() // Aj
+        .Arg<ffi::Buffer<ffi::DataType::F64>>() // Ax
+        .Arg<ffi::Buffer<ffi::DataType::F64>>() // x
+        .Ret<ffi::Buffer<ffi::DataType::F64>>() // b
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL( // A x = b
+    solve_c128, _solve_c128,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Ai
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Aj
+        .Arg<ffi::Buffer<ffi::DataType::C128>>() // Ax
+        .Arg<ffi::Buffer<ffi::DataType::C128>>() // b
+        .Ret<ffi::Buffer<ffi::DataType::C128>>() // x
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL( // b = A x
+    coo_mul_vec_c128, _coo_mul_vec_c128,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Ai
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Aj
+        .Arg<ffi::Buffer<ffi::DataType::C128>>() // Ax
+        .Arg<ffi::Buffer<ffi::DataType::C128>>() // x
+        .Ret<ffi::Buffer<ffi::DataType::C128>>() // b
+);
+
+// Python wrappers
+
 PYBIND11_MODULE(klujax_cpp, m) {
-  m.def(
-      "solve_f64",
-      []() {
-        const char *name = "xla._CUSTOM_CALL_TARGET";
-        return py::capsule((void *)&solve_f64, name);
-      },
-      "solve a real-valued linear system of equations");
-  m.def(
-      "solve_c128",
-      []() {
-        const char *name = "xla._CUSTOM_CALL_TARGET";
-        return py::capsule((void *)&solve_c128, name);
-      },
-      "solve a complex-valued linear system of equations");
-  m.def(
-      "coo_mul_vec_f64",
-      []() {
-        const char *name = "xla._CUSTOM_CALL_TARGET";
-        return py::capsule((void *)&coo_mul_vec_f64, name);
-      },
-      "Multiply a real-valued COO sparse matrix with a vector.");
-  m.def(
-      "coo_mul_vec_c128",
-      []() {
-        const char *name = "xla._CUSTOM_CALL_TARGET";
-        return py::capsule((void *)&coo_mul_vec_c128, name);
-      },
-      "Multiply a complex-valued COO sparse matrix with a vector.");
+  m.def("solve_f64", []() { return py::capsule((void *)&solve_f64); });
+  m.def("coo_mul_vec_f64",
+        []() { return py::capsule((void *)&coo_mul_vec_f64); });
+  m.def("solve_c128", []() { return py::capsule((void *)&solve_c128); });
+  m.def("coo_mul_vec_c128",
+        []() { return py::capsule((void *)&coo_mul_vec_c128); });
 }
