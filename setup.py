@@ -29,43 +29,46 @@ suitesparse_sources = [
 ]
 
 
-if sys.platform != "darwin":  # Linux or Windows
-    if sys.platform == "linux":
-        extra_link_args = ["-static-libgcc", "-static-libstdc++"]  # linux
-    else:
-        extra_link_args = []  # windows
-    extensions = [
-        Extension(
-            name="klujax_cpp",
-            sources=["klujax.cpp", *suitesparse_sources],
-            include_dirs=include_dirs,
-            library_dirs=site.getsitepackages(),
-            extra_compile_args=[],
-            extra_link_args=extra_link_args,
-            language="c++",
-        )
-    ]
-else:  # MAC OS
-    extensions = [
-        Extension(
-            name="klujax_cpp",
-            sources=["klujax.cpp"],
-            include_dirs=include_dirs,
-            library_dirs=site.getsitepackages(),
-            extra_compile_args=["-std=c++11"],
-            extra_link_args=[],
-            language="c++",
-        ),
-        Extension(
-            name="sparse_c",
-            sources=suitesparse_sources,
-            include_dirs=include_dirs,
-            library_dirs=site.getsitepackages(),
-            extra_compile_args=[],
-            extra_link_args=[],
-            language="c",
-        ),
-    ]
+extensions = {}
+if sys.platform == "linux":
+    extensions["klujax"] = Extension(
+        name="klujax_cpp",
+        sources=["klujax.cpp", *suitesparse_sources],
+        include_dirs=include_dirs,
+        library_dirs=site.getsitepackages(),
+        extra_compile_args=["-std=c++17"],
+        extra_link_args=["-static-libgcc", "-static-libstdc++"],
+        language="c++",
+    )
+elif sys.platform == "win32":
+    extensions["klujax"] = Extension(
+        name="klujax_cpp",
+        sources=["klujax.cpp", *suitesparse_sources],
+        include_dirs=include_dirs,
+        library_dirs=site.getsitepackages(),
+        extra_compile_args=["/std:c++17"],
+        extra_link_args=[],
+        language="c++",
+    )
+elif sys.platform == "darwin":  # MacOS
+    extensions["klujax"] = Extension(
+        name="klujax_cpp",
+        sources=["klujax.cpp"],
+        include_dirs=include_dirs,
+        library_dirs=site.getsitepackages(),
+        extra_compile_args=["-std=c++17"],
+        extra_link_args=[],
+        language="c++",
+    )
+    extensions["klujax_ss"] = Extension(
+        name="klujax_ss",
+        sources=suitesparse_sources,
+        include_dirs=include_dirs,
+        library_dirs=site.getsitepackages(),
+        extra_compile_args=[],
+        extra_link_args=[],
+        language="c",
+    )
 
 
 setup(
@@ -78,9 +81,9 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/flaport/klujax",
     py_modules=["klujax"],
-    ext_modules=extensions,
+    ext_modules=list(extensions.values()),
     cmdclass={"build_ext": build_ext},
-    install_requires=["jax==0.4.35", "jaxlib==0.4.35"],
+    install_requires=["jax>=0.4.35", "jaxlib>=0.4.35"],
     python_requires=">=3.10",
     classifiers=[
         "Development Status :: 3 - Alpha",

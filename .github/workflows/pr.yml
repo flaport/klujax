@@ -11,6 +11,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
 
+    # for a PR we just check if it can build for python=3.12
     steps:
       - uses: actions/checkout@v3
 
@@ -30,7 +31,3 @@ jobs:
           CIBW_ARCHS_LINUX: x86_64
           CIBW_ARCHS_WINDOWS: AMD64
           CIBW_BUILD: '*cp312*'
-
-      - uses: actions/upload-artifact@v3
-        with:
-          path: ./wheelhouse/*.whl
