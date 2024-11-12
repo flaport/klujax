@@ -19,6 +19,7 @@ import numpy as np
 from jax import core, lax
 from jax.core import ShapedArray
 from jax.interpreters import ad, batching, mlir
+from jaxlib.xla_extension import XlaRuntimeError
 
 import klujax_cpp
 
@@ -27,7 +28,6 @@ import klujax_cpp
 DEBUG = False
 jax.config.update("jax_enable_x64", True)
 jax.config.update("jax_platform_name", "cpu")
-
 _log = lambda s: None if not DEBUG else print(s, file=sys.stderr)
 
 # The main functions ==================================================================
@@ -49,6 +49,7 @@ def solve(Ai, Aj, Ax, b) -> jnp.ndarray:
             Ax.astype(jnp.float64),
             b.astype(jnp.float64),
         )
+
     return result  # type: ignore
 
 
@@ -418,192 +419,40 @@ def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
     if aAx is not None and ab is not None:
         assert isinstance(aAx, int) and isinstance(ab, int)
         n_lhs = Ax.shape[aAx]
-        if aAx != 0:
-            Ax = jnp.moveaxis(Ax, aAx, 0)
-        if ab != 0:
-            b = jnp.moveaxis(b, ab, 0)
+        Ax = jnp.moveaxis(Ax, aAx, 0)  # treat as lhs
+        b = jnp.moveaxis(b, ab, 0)  # treat as lhs
         result = operation(Ai, Aj, Ax, b)
         return result, 0
 
     if ab is None:
         assert isinstance(aAx, int)
         n_lhs = Ax.shape[aAx]
-        if aAx != 0:
-            Ax = jnp.moveaxis(Ax, aAx, 0)
+        Ax = jnp.moveaxis(Ax, aAx, 0)  # treat as lhs
         b = jnp.broadcast_to(b[None], (Ax.shape[0], *b.shape))
         result = operation(Ai, Aj, Ax, b)
         return result, 0
 
     if aAx is None:
         assert isinstance(ab, int)
-        if ab != 0:
-            b = jnp.moveaxis(b, ab, 0)
-        n_lhs, n_col, *n_rhs_list = b.shape
-        n_rhs = np.prod(np.array(n_rhs_list, dtype=np.int32))
-        b = b.reshape(n_lhs, n_col, n_rhs).transpose((1, 0, 2)).reshape(n_col, -1)[None]
+        _log(f"vmap: {b.shape=}")
+        b = jnp.moveaxis(b, ab, -1)  # treat as rhs
+        _log(f"vmap: {b.shape=}")
+        shape = b.shape
+        if b.ndim == 0:
+            b = b[None, None, None]
+        elif b.ndim == 1:
+            b = b[None, None, :]
+        elif b.ndim == 2:
+            b = b[None, :, :]
+        elif b.ndim == 3:
+            b = b[:, :, :]
+
+        b = b.reshape(b.shape[0], b.shape[1], -1)
+
+        _log(f"vmap: {b.shape=}")
+        # b is now guarenteed to have shape (n_lhs, n_col, n_rhs)
         result = operation(Ai, Aj, Ax, b)
-        result = result.reshape(n_col, n_lhs, *n_rhs_list)
-        return result, 1
+        result = result.reshape(*shape)
+        return result, -1
 
     raise ValueError("invalid arguments for vmap")
-
-
-# Quick Tests =========================================================================
-
-if __name__ == "__main__":
-    n_nz = 8
-    n_col = 5
-    n_rhs = 1
-    n_lhs = 3  # only used in batched & vmap
-    dtype = np.float64
-
-    ## SINGLE =========================================================================
-
-    if False:
-        print("single")
-        Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-        Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
-        Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-        Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-        b = jax.random.normal(bkey, (n_col, n_rhs), dtype=dtype)
-        x_sp = solve(Ai, Aj, Ax, b)
-
-        A = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax)
-        x = jsp.linalg.solve(A, b)
-
-        print(x_sp - x)
-        print(((x_sp - x) < 1e-9).all())
-
-    ## BATCHED ========================================================================
-
-    if False:
-        print("batched")
-        Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-        Ax = jax.random.normal(Axkey, (n_lhs, n_nz), dtype=dtype)
-        Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-        Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-        b = jax.random.normal(bkey, (n_lhs, n_col, n_rhs), dtype=dtype)
-        x_sp = solve(Ai, Aj, Ax, b)
-
-        A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
-        x = jax.vmap(jsp.linalg.solve, (0, 0), 0)(A, b)
-
-        print(x_sp - x)
-        print(((x_sp - x) < 1e-9).all())
-
-    ## RHS ============================================================================
-
-    if False:
-        print("rhs")
-        Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-        Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
-        Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-        Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-        b = jax.random.normal(bkey, (n_col, 2), dtype=dtype)
-
-        x_sp = solve(Ai, Aj, Ax, b[None])
-        x_sp1 = solve(Ai, Aj, Ax, b[None, :, 0:1])
-        x_sp2 = solve(Ai, Aj, Ax, b[None, :, 1:2])
-
-        print(b)
-        print(x_sp)
-        print(x_sp1)
-        print(x_sp2)
-
-    ## RHS 2 ==========================================================================
-
-    if False:
-        print("rhs")
-        Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-        Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
-        Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-        Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-        b = jax.random.normal(bkey, (n_col, 2), dtype=dtype)
-
-        x_sp = coo_mul_vec(Ai, Aj, Ax, b)
-        x_sp1 = coo_mul_vec(Ai, Aj, Ax, b[:, 0])
-        x_sp2 = coo_mul_vec(Ai, Aj, Ax, b[:, 1])
-
-        print(x_sp)
-        print(x_sp1)
-        print(x_sp2)
-
-    ## VMAP A & b =====================================================================
-
-    if False:
-        print("vmap A & b")
-        Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-        Ax = jax.random.normal(Axkey, (n_lhs, n_nz), dtype=dtype).T
-        Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-        Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-        b = jax.random.normal(bkey, (n_col, n_rhs, n_lhs), dtype=dtype)
-        x_sp = jax.vmap(solve, (None, None, 1, 2), 0)(Ai, Aj, Ax, b)
-
-        A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax.T)
-        x = jax.vmap(jsp.linalg.solve, (0, 0), 0)(A, b.transpose(2, 0, 1))
-
-        print(x_sp - x)
-        print(((x_sp - x) < 1e-9).all())
-
-    ## VMAP A =========================================================================
-
-    if False:
-        print("vmap A")
-        Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-        Ax = jax.random.normal(Axkey, (n_lhs, n_nz), dtype=dtype)
-        Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-        Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-        b = jax.random.normal(bkey, (n_col, n_rhs), dtype=dtype)
-
-        vsolve = jax.vmap(solve, in_axes=(None, None, 0, None), out_axes=0)
-        x_sp = vsolve(Ai, Aj, Ax, b)
-
-        A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
-        x = jsp.linalg.solve(A, b[None])
-
-        print(x_sp - x)
-        print(((x_sp - x) < 1e-9).all())
-
-    ## VMAP b =========================================================================
-
-    if False:
-        print("vmap b")
-        Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-        Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
-        Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-        Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-        b = jax.random.normal(bkey, (n_col, 2), dtype=dtype)
-
-        x_sp = jax.vmap(solve, (None, None, None, 1), 1)(Ai, Aj, Ax, b)
-        x_sp2 = jnp.stack([solve(Ai, Aj, Ax, b[:, i]) for i in range(2)], axis=1)
-
-        print(x_sp)
-        print(x_sp2)
-        print(((x_sp - x_sp2) < 1e-9).all())
-
-    ## Grads ==========================================================================
-
-    if True:
-        print("grads")
-        Axkey, Aikey, Ajkey, bkey, ykey = jax.random.split(jax.random.PRNGKey(33), 5)
-        Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
-        Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-        Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-        b = jax.random.normal(bkey, (n_col,), dtype=dtype)
-        y = jax.random.normal(bkey, (n_col,), dtype=dtype)
-
-        def _loss(Ax, b):
-            return jnp.sum(jnp.abs(solve(Ai, Aj, Ax, b) - y) ** 2)
-
-        _grad = jax.grad(_loss, argnums=[0, 1])
-
-    ## Sax snippet ====================================================================
-    if True:
-        Ai = jnp.array([6, 4, 6, 4, 2, 11, 1, 8, 7, 7, 5, 5, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], dtype=jnp.int32)  # fmt: skip
-        Aj = jnp.array([ 0, 0, 3, 3, 5, 4, 7, 6, 9, 10, 9, 10, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, ], dtype=jnp.int32)  # fmt: skip
-        Ax = jnp.array([-0.70710678 - 0.0j, -0.0 - 0.70710678j, -0.0 - 0.70710678j, -0.70710678 - 0.0j, -0.82076344 - 0.57126822j, -0.82076344 - 0.57126822j, -0.82076344 - 0.57126822j, -0.82076344 - 0.57126822j, -0.70710678 - 0.0j, -0.0 - 0.70710678j, -0.0 - 0.70710678j, -0.70710678 - 0.0j, 1.0 + 0.0j, 1.0 + 0.0j, 1.0 + 0.0j, 1.0 + 0.0j, 1.0 + 0.0j, 1.0 + 0.0j, 1.0 + 0.0j, 1.0 + 0.0j, 1.0 + 0.0j, 1.0 + 0.0j, 1.0 + 0.0j, 1.0 + 0.0j], dtype=jnp.complex128)  # fmt: skip
-        b = jnp.array([[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 0.0]], dtype=jnp.complex128)  # fmt: skip
-        ref = jnp.array([[1.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j], [ 0.0 + 0.0j, 0.0 + 0.0j, 0.58036739 + 0.40394763j, -0.40394763 + 0.58036739j, ], [ 0.0 + 0.0j, 0.0 + 0.0j, -0.40394763 + 0.58036739j, 0.58036739 + 0.40394763j, ], [0.0 + 0.0j, 1.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j], [0.0 + 0.70710678j, 0.70710678 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j], [0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.70710678j, 0.70710678 + 0.0j], [0.70710678 + 0.0j, 0.0 + 0.70710678j, 0.0 + 0.0j, 0.0 + 0.0j], [0.0 + 0.0j, 0.0 + 0.0j, 0.70710678 + 0.0j, 0.0 + 0.70710678j], [ 0.58036739 + 0.40394763j, -0.40394763 + 0.58036739j, 0.0 + 0.0j, 0.0 + 0.0j, ], [0.0 + 0.0j, 0.0 + 0.0j, 1.0 + 0.0j, 0.0 + 0.0j], [0.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j, 1.0 + 0.0j], [ -0.40394763 + 0.58036739j, 0.58036739 + 0.40394763j, 0.0 + 0.0j, 0.0 + 0.0j]], dtype=jnp.complex128)  # fmt: skip
-        x = solve(Ai, Aj, Ax, b)
-        print(np.int32(np.abs(x) > 0))
-        print((jnp.abs(x - ref) < 1e-7).all())
