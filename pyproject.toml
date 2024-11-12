@@ -4,9 +4,28 @@ build-backend = "setuptools.build_meta"
 
 [tool.black]
 line-length = 88
-target-version = ['py311']
+target-version = ['py312']
 include = '\.pyi?$'
 
 [tool.pyright]
 reportPrivateImportUsage = false
 reportUnusedVariable = false
+
+[tool.ruff.pydocstyle]
+convention = "google"
+
+[tool.tbump]
+regex = '''
+  (?P<major>\d+)
+  \.
+  (?P<minor>\d+)
+  \.
+  (?P<patch>\d+)
+  '''
+
+[tool.tbump.git]
+message_template = "Bump version: {old_version} → {new_version}"
+tag_template = "{new_version}"
+
+[tool.tbump.version]
+current = "0.8.4"
