@@ -176,9 +176,18 @@ def _log_and_test_equality(x, x_sp):
     print(f"\nx_sp=\n{x_sp}")
     print(f"\nx=\n{x}")
     print(f"\ndiff=\n{np.round(x_sp - x, 9)}")
+    print(f"\nis_equal=\n{_is_almost_equal(x_sp, x)}")
     np.testing.assert_array_almost_equal(x_sp, x)
 
 
 def _log(**kwargs):
     for k, v in kwargs.items():
         print(f"{k}={v}")
+
+
+def _is_almost_equal(arr1, arr2):
+    try:
+        np.testing.assert_array_almost_equal(arr1, arr2)
+        return True
+    except AssertionError:
+        return False
