@@ -84,7 +84,7 @@ setup(
     ext_modules=list(extensions.values()),
     cmdclass={"build_ext": build_ext},
     install_requires=["jax>=0.4.35", "jaxlib>=0.4.35"],
-    python_requires=">=3.10",
+    python_requires=">=3.8",
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Programming Language :: Python :: 3",
