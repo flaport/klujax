@@ -1,12 +1,12 @@
 dist:
 	python setup.py build sdist bdist_wheel
 
+test:
+	pytest tests.py
+
 .PHONY: build
 build:
 	python setup.py build_ext --inplace
-
-test:
-	pytest tests.py
 
 .PHONY: suitesparse
 suitesparse:
@@ -25,7 +25,6 @@ pybind11:
 	rm -rf pybind11
 	git clone --depth 1 --branch stable https://github.com/pybind/pybind11 pybind11
 	cd pybind11 && rm -rf .git
-
 
 clean:
 	find . -not -path "./suitesparse*"  -not -path "./xla*" -name "dist" | xargs rm -rf
