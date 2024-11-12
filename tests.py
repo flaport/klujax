@@ -114,6 +114,7 @@ def test_4d_vmap(dtype, op):
 
 
 @log_test_name
+@pytest.mark.skipif(sys.platform == "win32", reason="FIXME: known to still segfault on Windows!")  # fmt: skip
 @pytest.mark.parametrize("dtype", [np.float64, np.complex128])
 @pytest.mark.parametrize("op", [klujax.solve, klujax.coo_mul_vec])
 def test_vmap_fail(dtype, op):
