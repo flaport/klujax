@@ -33,4 +33,4 @@ jobs:
           CIBW_BUILD: '*cp312*'
           CIBW_SKIP: '*-musllinux* pp*'
           CIBW_BEFORE_TEST: 'pip install pytest'
-          CIBW_TEST_COMMAND: 'find .'
+          CIBW_TEST_COMMAND: 'pytest {package}/tests.py'
