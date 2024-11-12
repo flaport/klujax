@@ -14,12 +14,11 @@ from functools import partial
 import jax
 import jax.extend
 import jax.numpy as jnp
-import jax.scipy as jsp
 import numpy as np
 from jax import core, lax
 from jax.core import ShapedArray
 from jax.interpreters import ad, batching, mlir
-from jaxlib.xla_extension import XlaRuntimeError
+from jaxtyping import Array
 
 import klujax_cpp
 
@@ -28,13 +27,24 @@ import klujax_cpp
 DEBUG = False
 jax.config.update("jax_enable_x64", True)
 jax.config.update("jax_platform_name", "cpu")
-_log = lambda s: None if not DEBUG else print(s, file=sys.stderr)
+_log = lambda s: None if not DEBUG else print(s, file=sys.stderr)  # noqa: E731
 
 # The main functions ==================================================================
 
 
 @jax.jit
-def solve(Ai, Aj, Ax, b) -> jnp.ndarray:
+def solve(Ai: Array, Aj: Array, Ax: Array, b: Array) -> Array:
+    """Solve for x in the sparse linear system Ax=b.
+
+    Args:
+        Ai: [n_nz; int32]: the row indices of the sparse matrix A
+        Aj: [n_nz; int32]: the column indices of the sparse matrix A
+        Ax: [n_lhs? x n_nz; float64|complex128]: the values of the sparse matrix A
+        b:  [n_lhs? x n_col x n_rhs?; float64|complex128]: the target vector
+
+    Returns:
+        x: the result (x≈A^-1b)
+    """
     if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
         result = solve_c128.bind(
             Ai.astype(jnp.int32),
@@ -54,20 +64,31 @@ def solve(Ai, Aj, Ax, b) -> jnp.ndarray:
 
 
 @jax.jit
-def coo_mul_vec(Ai, Aj, Ax, b) -> jnp.ndarray:
-    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
+def coo_mul_vec(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
+    """Multiply a sparse matrix with a vector: Ax=b
+
+    Args:
+        Ai: [n_nz; int32]: the row indices of the sparse matrix A
+        Aj: [n_nz; int32]: the column indices of the sparse matrix A
+        Ax: [n_lhs? x n_nz; float64|complex128]: the values of the sparse matrix A
+        x:  [n_lhs? x n_col x n_rhs?; float64|complex128]: the vector that's being multiplied by A
+
+    Returns:
+        b: the result of the multiplication (b=Ax)
+    """
+    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, x)):
         result = coo_mul_vec_c128.bind(
             Ai.astype(jnp.int32),
             Aj.astype(jnp.int32),
             Ax.astype(jnp.complex128),
-            b.astype(jnp.complex128),
+            x.astype(jnp.complex128),
         )
     else:
         result = coo_mul_vec_f64.bind(
             Ai.astype(jnp.int32),
             Aj.astype(jnp.int32),
             Ax.astype(jnp.float64),
-            b.astype(jnp.float64),
+            x.astype(jnp.float64),
         )
     return result  # type: ignore
 
@@ -418,7 +439,6 @@ def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
 
     if aAx is not None and ab is not None:
         assert isinstance(aAx, int) and isinstance(ab, int)
-        n_lhs = Ax.shape[aAx]
         Ax = jnp.moveaxis(Ax, aAx, 0)  # treat as lhs
         b = jnp.moveaxis(b, ab, 0)  # treat as lhs
         result = operation(Ai, Aj, Ax, b)
@@ -426,7 +446,6 @@ def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
 
     if ab is None:
         assert isinstance(aAx, int)
-        n_lhs = Ax.shape[aAx]
         Ax = jnp.moveaxis(Ax, aAx, 0)  # treat as lhs
         b = jnp.broadcast_to(b[None], (Ax.shape[0], *b.shape))
         result = operation(Ai, Aj, Ax, b)
@@ -450,7 +469,7 @@ def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
         b = b.reshape(b.shape[0], b.shape[1], -1)
 
         _log(f"vmap: {b.shape=}")
-        # b is now guarenteed to have shape (n_lhs, n_col, n_rhs)
+        # b is now guaranteed to have shape (n_lhs, n_col, n_rhs)
         result = operation(Ai, Aj, Ax, b)
         result = result.reshape(*shape)
         return result, -1
