@@ -31,3 +31,4 @@ jobs:
           CIBW_ARCHS_LINUX: x86_64
           CIBW_ARCHS_WINDOWS: AMD64
           CIBW_BUILD: '*cp312*'
+          CIBW_TEST_COMMAND: 'pytest tests.py'
