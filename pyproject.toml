@@ -58,15 +58,6 @@ convention = "google"
   "MANIFEST.in"
 ]
 
-[tool.tbump]
-regex = '''
-  (?P<major>\d+)
-  \.
-  (?P<minor>\d+)
-  \.
-  (?P<patch>\d+)
-  '''
-
 [[tool.tbump.file]]
 src = "README.md"
 
@@ -80,8 +71,15 @@ src = "klujax.py"
 src = "klujax.cpp"
 
 [tool.tbump.git]
-message_template = "Bump version: {old_version} → {new_version}"
+message_template = "Bump to {new_version}"
 tag_template = "{new_version}"
 
 [tool.tbump.version]
 current = "0.2.10"
+regex = '''
+  (?P<major>\d+)
+  \.
+  (?P<minor>\d+)
+  \.
+  (?P<patch>\d+)
+  '''
