@@ -8,24 +8,22 @@ from glob import glob
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
-CWD = os.path.dirname(os.path.abspath(__file__))
-
 include_dirs = [
-    os.path.join(CWD, "xla"),
-    os.path.join(CWD, "pybind11", "include"),
-    os.path.join(CWD, "suitesparse", "SuiteSparse_config"),
-    os.path.join(CWD, "suitesparse", "AMD", "Include"),
-    os.path.join(CWD, "suitesparse", "COLAMD", "Include"),
-    os.path.join(CWD, "suitesparse", "BTF", "Include"),
-    os.path.join(CWD, "suitesparse", "KLU", "Include"),
+    os.path.join("xla"),
+    os.path.join("pybind11", "include"),
+    os.path.join("suitesparse", "SuiteSparse_config"),
+    os.path.join("suitesparse", "AMD", "Include"),
+    os.path.join("suitesparse", "COLAMD", "Include"),
+    os.path.join("suitesparse", "BTF", "Include"),
+    os.path.join("suitesparse", "KLU", "Include"),
 ]
 
 suitesparse_sources = [
-    os.path.join(CWD, "suitesparse", "SuiteSparse_config", "SuiteSparse_config.c"),
-    *glob(os.path.join(CWD, "suitesparse", "AMD", "Source", "*.c")),
-    *glob(os.path.join(CWD, "suitesparse", "COLAMD", "Source", "*.c")),
-    *glob(os.path.join(CWD, "suitesparse", "BTF", "Source", "*.c")),
-    *glob(os.path.join(CWD, "suitesparse", "KLU", "Source", "*.c")),
+    os.path.join("suitesparse", "SuiteSparse_config", "SuiteSparse_config.c"),
+    *glob(os.path.join("suitesparse", "AMD", "Source", "*.c")),
+    *glob(os.path.join("suitesparse", "COLAMD", "Source", "*.c")),
+    *glob(os.path.join("suitesparse", "BTF", "Source", "*.c")),
+    *glob(os.path.join("suitesparse", "KLU", "Source", "*.c")),
 ]
 
 
