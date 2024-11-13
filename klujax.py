@@ -25,6 +25,8 @@ import klujax_cpp
 # Config ==============================================================================
 
 DEBUG = False
+jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_platform_name", "cpu")
 _log = lambda s: None if not DEBUG else print(s, file=sys.stderr)  # noqa: E731
 
 # The main functions ==================================================================
