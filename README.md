@@ -1,5 +1,5 @@
 # KLUJAX
-> version: 0.3.0
+> version: 0.3.1
 
 A sparse linear solver for JAX based on the efficient [KLU algorithm](https://ufdcimages.uflib.ufl.edu/UF/E0/01/17/21/00001/palamadai_e.pdf).
 
