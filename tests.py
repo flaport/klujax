@@ -132,6 +132,35 @@ def test_vmap_fail(dtype, op):
         jax.vmap(op, in_axes=(None, None, None, 0), out_axes=0)(Ai, Aj, Ax, b)
 
 
+@log_test_name
+@pytest.mark.parametrize("dtype", [np.float64])
+@pytest.mark.parametrize("ops", [(klujax.solve, jsp.linalg.solve), (klujax.coo_mul_vec, lax.dot)])  # fmt: skip
+def test_1d_derivative(dtype, ops):
+    op_sparse, op_dense = ops
+    Ai, Aj, Ax, b = _get_rand_arrs_1d(8, (n_col := 5), dtype=dtype)
+
+    p = 0.35778278
+
+    def fsparse(p):
+        x_sp = op_sparse(Ai, Aj, p * Ax, p * b)
+        return jnp.linalg.norm(x_sp)
+
+    def fdense(p):
+        A = jnp.zeros((n_col, n_col), dtype=Ax.dtype).at[Ai, Aj].add(Ax)
+        x = op_dense(p * A, p * b)
+        return jnp.linalg.norm(x)
+
+    J1 = jax.jacfwd(fsparse)(p)
+    J2 = jax.jacfwd(fdense)(p)
+
+    _log_and_test_equality(J1, J2)
+
+    J1 = jax.jacrev(fsparse)(p)
+    J2 = jax.jacrev(fdense)(p)
+
+    _log_and_test_equality(J1, J2)
+
+
 def _get_rand_arrs_1d(n_nz, n_col, *, dtype, seed=33):
     Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(seed), 4)
     Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)

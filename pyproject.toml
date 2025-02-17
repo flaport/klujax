@@ -48,7 +48,7 @@ skip = "*.ipynb"
 reportPrivateImportUsage = false
 reportUnusedVariable = false
 
-[tool.ruff.pydocstyle]
+[tool.ruff.lint.pydocstyle]
 convention = "google"
 
 [tool.setuptools.package-data]

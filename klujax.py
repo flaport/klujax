@@ -15,7 +15,7 @@ import jax
 import jax.extend
 import jax.numpy as jnp
 import numpy as np
-from jax import core, lax
+from jax import lax
 from jax.core import ShapedArray
 from jax.interpreters import ad, batching, mlir
 from jaxtyping import Array
@@ -105,10 +105,10 @@ COMPLEX_DTYPES = (
 
 # Primitives ==========================================================================
 
-solve_f64 = core.Primitive("solve_f64")
-solve_c128 = core.Primitive("solve_c128")
-coo_mul_vec_f64 = core.Primitive("coo_mul_vec_f64")
-coo_mul_vec_c128 = core.Primitive("coo_mul_vec_c128")
+solve_f64 = jax.extend.core.Primitive("solve_f64")
+solve_c128 = jax.extend.core.Primitive("solve_c128")
+coo_mul_vec_f64 = jax.extend.core.Primitive("coo_mul_vec_f64")
+coo_mul_vec_c128 = jax.extend.core.Primitive("coo_mul_vec_c128")
 
 # Register XLA extensions ==============================================================
 
@@ -395,8 +395,6 @@ def coo_mul_vec_value_and_jvp(arg_values, arg_tangents):
 
 
 # Backward Gradients through Transposition ============================================
-
-
 @transpose_register(solve_f64)
 @transpose_register(solve_c128)
 def solve_transpose(ct, Ai, Aj, Ax, b):
@@ -419,7 +417,6 @@ def coo_mul_vec_transpose(ct, Ai, Aj, Ax, b):
         return None, None, None, coo_mul_vec(Aj, Ai, Ax.conj(), ct)  # = A.T@ct [= ct@A]
     else:
         dA = ct[Ai] * b[Aj]
-        dA = dA.reshape(dA.shape[0], -1).sum(-1)  # not sure about this...
         return None, None, dA, None
 
 
@@ -472,6 +469,6 @@ def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
         # b is now guaranteed to have shape (n_lhs, n_col, n_rhs)
         result = operation(Ai, Aj, Ax, b)
         result = result.reshape(*shape)
-        return result, -1
+        return result, result.ndim - 1
 
     raise ValueError("invalid arguments for vmap")
