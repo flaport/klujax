@@ -61,11 +61,11 @@ def test_1d(dtype, op_sparse):
 @parametrize_dtypes
 @parametrize_ops
 def test_2d(dtype, op_sparse):
-    op_dense = OPS_DENSE[op_sparse]
+    op_dense = jax.vmap(OPS_DENSE[op_sparse], (0, 0), 0)
     Ai, Aj, Ax, b = _get_rand_arrs_2d((n_lhs := 3), 8, (n_col := 5), dtype=dtype)
     x_sp = op_sparse(Ai, Aj, Ax, b)
     A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
-    x = jax.vmap(op_dense, (0, 0), 0)(A, b)
+    x = op_dense(A, b)
     _log_and_test_equality(x, x_sp)
 
 
@@ -86,28 +86,52 @@ def test_2d_vmap(dtype, op_sparse):
 @parametrize_dtypes
 @parametrize_ops
 def test_3d(dtype, op_sparse):
-    op_dense = OPS_DENSE[op_sparse]
+    op_dense = jax.vmap(OPS_DENSE[op_sparse], (0, 0), 0)
     Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 8, (n_col := 5), 2, dtype=dtype)
     x_sp = op_sparse(Ai, Aj, Ax, b)
     A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
-    x = jax.vmap(op_dense, (0, 0), 0)(A, b)
+    x = op_dense(A, b)
     _log_and_test_equality(x, x_sp)
 
 
 @log_test_name
 @parametrize_dtypes
 @parametrize_ops
-def test_jacfwd(dtype, op_sparse):
+def test_3d_jacfwd(dtype, op_sparse):
+    op_dense = jax.vmap(OPS_DENSE[op_sparse], (0, 0), 0)
     Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 8, (n_col := 5), 2, dtype=dtype)
-    jax.jacfwd(op_sparse, 2)(Ai, Aj, Ax, b)
+
+    # jacobian on b
+    jac_sp = jax.jacfwd(op_sparse, 3)(Ai, Aj, Ax, b)
+    A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
+    jac = jax.jacfwd(op_dense, 1)(A, b)
+    _log_and_test_equality(jac_sp, jac)
+
+    # jacobian on A
+    jac_sp = jax.jacfwd(op_sparse, 2)(Ai, Aj, Ax, b)
+    A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
+    jac = jax.jacfwd(op_dense, 0)(A, b)[..., Ai, Aj]
+    _log_and_test_equality(jac_sp, jac)
 
 
 @log_test_name
 @parametrize_dtypes
 @parametrize_ops
-def test_jacrev(dtype, op_sparse):
+def test_3d_jacrev(dtype, op_sparse):
+    op_dense = jax.vmap(OPS_DENSE[op_sparse], (0, 0), 0)
     Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 8, (n_col := 5), 2, dtype=dtype)
-    jax.jacrev(op_sparse, 2)(Ai, Aj, Ax, b)
+
+    # jacobian on b
+    jac_sp = jax.jacrev(op_sparse, 3)(Ai, Aj, Ax, b)
+    A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
+    jac = jax.jacrev(op_dense, 1)(A, b)
+    _log_and_test_equality(jac_sp, jac)
+
+    # jacobian on A
+    jac_sp = jax.jacrev(op_sparse, 2)(Ai, Aj, Ax, b)
+    A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
+    jac = jax.jacrev(op_dense, 0)(A, b)[..., Ai, Aj]
+    _log_and_test_equality(jac_sp, jac)
 
 
 @pytest.mark.skip
@@ -211,11 +235,11 @@ def _get_rand_arrs_3d(n_lhs, n_nz, n_col, n_rhs, *, dtype, seed=33):
 
 
 def _log_and_test_equality(x, x_sp):
-    print(f"\nx_sp=\n{x_sp}")
     print(f"\nx=\n{x}")
+    print(f"\nx_sp=\n{x_sp}")
     print(f"\ndiff=\n{np.round(x_sp - x, 9)}")
-    print(f"\nis_equal=\n{_is_almost_equal(x_sp, x)}")
-    np.testing.assert_array_almost_equal(x_sp, x)
+    print(f"\nis_equal=\n{_is_almost_equal(x, x_sp)}")
+    np.testing.assert_array_almost_equal(x, x_sp)
 
 
 def _log(**kwargs):
