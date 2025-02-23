@@ -12,8 +12,8 @@ namespace ffi = xla::ffi;
 #include <cstring>  // for memset
 
 ffi::Error validate_dot_f64_args(
-    ffi::Buffer<ffi::DataType::S32> &Ai,
-    ffi::Buffer<ffi::DataType::S32> &Aj,
+    const ffi::Buffer<ffi::DataType::S32> &Ai,
+    const ffi::Buffer<ffi::DataType::S32> &Aj,
     const ffi::AnyBuffer::Dimensions ds_Ax,
     const ffi::AnyBuffer::Dimensions ds_x) {
     int d_x = ds_x.size();
@@ -74,11 +74,11 @@ ffi::Error validate_dot_f64_args(
     return ffi::Error::Success();
 }
 
-ffi::Error _dot_f64(
-    ffi::Buffer<ffi::DataType::S32> Ai,
-    ffi::Buffer<ffi::DataType::S32> Aj,
-    ffi::Buffer<ffi::DataType::F64> Ax,
-    ffi::Buffer<ffi::DataType::F64> x,
+ffi::Error dot_f64(
+    const ffi::Buffer<ffi::DataType::S32> Ai,
+    const ffi::Buffer<ffi::DataType::S32> Aj,
+    const ffi::Buffer<ffi::DataType::F64> Ax,
+    const ffi::Buffer<ffi::DataType::F64> x,
     ffi::Result<ffi::Buffer<ffi::DataType::F64>> b) {
     auto ds_x = x.dimensions();
     auto ds_Ax = Ax.dimensions();
@@ -120,7 +120,7 @@ ffi::Error _dot_f64(
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(  // b = A x
-    dot_f64, _dot_f64,
+    dot_f64_handler, dot_f64,
     ffi::Ffi::Bind()
         .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Ai
         .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Aj
@@ -129,11 +129,11 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(  // b = A x
         .Ret<ffi::Buffer<ffi::DataType::F64>>()  // b
 );
 
-ffi::Error _dot_c128(
-    ffi::Buffer<ffi::DataType::S32> Ai,
-    ffi::Buffer<ffi::DataType::S32> Aj,
-    ffi::Buffer<ffi::DataType::C128> Ax,
-    ffi::Buffer<ffi::DataType::C128> x,
+ffi::Error dot_c128(
+    const ffi::Buffer<ffi::DataType::S32> Ai,
+    const ffi::Buffer<ffi::DataType::S32> Aj,
+    const ffi::Buffer<ffi::DataType::C128> Ax,
+    const ffi::Buffer<ffi::DataType::C128> x,
     ffi::Result<ffi::Buffer<ffi::DataType::C128>> b) {
     auto ds_x = x.dimensions();
     auto ds_Ax = Ax.dimensions();
@@ -180,7 +180,7 @@ ffi::Error _dot_c128(
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(  // b = A x
-    dot_c128, _dot_c128,
+    dot_c128_handler, dot_c128,
     ffi::Ffi::Bind()
         .Arg<ffi::Buffer<ffi::DataType::S32>>()   // Ai
         .Arg<ffi::Buffer<ffi::DataType::S32>>()   // Aj
@@ -192,7 +192,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(  // b = A x
 // Python wrappers
 PYBIND11_MODULE(klujax_cpp, m) {
     m.def("dot_f64",
-          []() { return py::capsule((void *)&dot_f64); });
+          []() { return py::capsule((void *)&dot_f64_handler); });
     m.def("dot_c128",
-          []() { return py::capsule((void *)&dot_c128); });
+          []() { return py::capsule((void *)&dot_c128_handler); });
 }

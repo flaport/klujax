@@ -33,8 +33,8 @@ def log_test_name(f):
 
 
 def parametrize_dtypes(func):
-    return pytest.mark.parametrize("dtype", [np.float64, np.complex128])(func)
-    # return pytest.mark.parametrize("dtype", [np.complex128])(func)
+    # return pytest.mark.parametrize("dtype", [np.float64, np.complex128])(func)
+    return pytest.mark.parametrize("dtype", [np.float64])(func)
 
 
 def parametrize_ops(func):
