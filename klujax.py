@@ -198,3 +198,36 @@ def dot_f64_vmap(
 
 
 batching.primitive_batchers[dot_f64] = dot_f64_vmap
+
+# Transposition =======================================================================
+
+
+def dot_f64_transpose(
+    ct: Array,
+    Ai: Array,
+    Aj: Array,
+    Ax: Array,
+    x: Array,
+) -> tuple[Array, Array, Array, Array]:
+    if ad.is_undefined_primal(Ai):
+        msg = "Found undefined primal for Ai."
+        raise ValueError(msg)
+
+    if ad.is_undefined_primal(Aj):
+        msg = "Found undefined primal for Aj."
+        raise ValueError(msg)
+
+    if ad.is_undefined_primal(x):
+        # replace x by ct
+        return Ai, Aj, Ax, dot_f64.bind(Ai, Aj, Ax, ct)
+
+    if ad.is_undefined_primal(Ax):
+        # replace Ax by ct
+        # copied from jax.experimental.sparse.coo._coo_matvec_transpose
+        return Ai, Aj, ct[Ai] * x[Aj], x
+
+    msg = "No undefined primals in transpose."
+    raise ValueError(msg)
+
+
+ad.primitive_transposes[dot_f64] = dot_f64_transpose

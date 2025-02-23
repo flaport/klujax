@@ -99,8 +99,15 @@ def test_3d(dtype, op_sparse):
 @parametrize_ops
 def test_jacfwd(dtype, op_sparse):
     Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 8, (n_col := 5), 2, dtype=dtype)
-    jac_sp = jax.jacfwd(op_sparse, 2)(Ai, Aj, Ax, b)
-    _log_and_test_equality(jac_sp, jac_sp)
+    jax.jacfwd(op_sparse, 2)(Ai, Aj, Ax, b)
+
+
+@log_test_name
+@parametrize_dtypes
+@parametrize_ops
+def test_jacrev(dtype, op_sparse):
+    Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 8, (n_col := 5), 2, dtype=dtype)
+    jax.jacrev(op_sparse, 2)(Ai, Aj, Ax, b)
 
 
 @pytest.mark.skip
