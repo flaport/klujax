@@ -194,5 +194,5 @@ PYBIND11_MODULE(klujax_cpp, m) {
     m.def("dot_f64",
           []() { return py::capsule((void *)&dot_f64); });
     m.def("dot_c128",
-          []() { return py::capsule((void *)&dot_f64); });
+          []() { return py::capsule((void *)&dot_c128); });
 }

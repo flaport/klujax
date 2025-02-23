@@ -11,6 +11,7 @@ from jax import lax
 from jaxlib.xla_extension import XlaRuntimeError
 
 import klujax
+from klujax import COMPLEX_DTYPES
 
 OPS_DENSE = {  # sparse to dense
     klujax.dot: lax.dot,
@@ -32,8 +33,8 @@ def log_test_name(f):
 
 
 def parametrize_dtypes(func):
-    # return pytest.mark.parametrize("dtype", [np.float64, np.complex128])(func)
-    return pytest.mark.parametrize("dtype", [np.float64])(func)
+    return pytest.mark.parametrize("dtype", [np.float64, np.complex128])(func)
+    # return pytest.mark.parametrize("dtype", [np.complex128])(func)
 
 
 def parametrize_ops(func):
@@ -100,17 +101,18 @@ def test_3d(dtype, op_sparse):
 def test_3d_jacfwd(dtype, op_sparse):
     op_dense = jax.vmap(OPS_DENSE[op_sparse], (0, 0), 0)
     Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 8, (n_col := 5), 2, dtype=dtype)
+    holomorphic = dtype in COMPLEX_DTYPES
 
     # jacobian on b
-    jac_sp = jax.jacfwd(op_sparse, 3)(Ai, Aj, Ax, b)
+    jac_sp = jax.jacfwd(op_sparse, 3, holomorphic=holomorphic)(Ai, Aj, Ax, b)
     A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
-    jac = jax.jacfwd(op_dense, 1)(A, b)
+    jac = jax.jacfwd(op_dense, 1, holomorphic=holomorphic)(A, b)
     _log_and_test_equality(jac_sp, jac)
 
     # jacobian on A
-    jac_sp = jax.jacfwd(op_sparse, 2)(Ai, Aj, Ax, b)
+    jac_sp = jax.jacfwd(op_sparse, 2, holomorphic=holomorphic)(Ai, Aj, Ax, b)
     A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
-    jac = jax.jacfwd(op_dense, 0)(A, b)[..., Ai, Aj]
+    jac = jax.jacfwd(op_dense, 0, holomorphic=holomorphic)(A, b)[..., Ai, Aj]
     _log_and_test_equality(jac_sp, jac)
 
 
@@ -120,17 +122,18 @@ def test_3d_jacfwd(dtype, op_sparse):
 def test_3d_jacrev(dtype, op_sparse):
     op_dense = jax.vmap(OPS_DENSE[op_sparse], (0, 0), 0)
     Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 8, (n_col := 5), 2, dtype=dtype)
+    holomorphic = dtype in COMPLEX_DTYPES
 
     # jacobian on b
-    jac_sp = jax.jacrev(op_sparse, 3)(Ai, Aj, Ax, b)
+    jac_sp = jax.jacrev(op_sparse, 3, holomorphic=holomorphic)(Ai, Aj, Ax, b)
     A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
-    jac = jax.jacrev(op_dense, 1)(A, b)
+    jac = jax.jacrev(op_dense, 1, holomorphic=holomorphic)(A, b)
     _log_and_test_equality(jac_sp, jac)
 
     # jacobian on A
-    jac_sp = jax.jacrev(op_sparse, 2)(Ai, Aj, Ax, b)
+    jac_sp = jax.jacrev(op_sparse, 2, holomorphic=holomorphic)(Ai, Aj, Ax, b)
     A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
-    jac = jax.jacrev(op_dense, 0)(A, b)[..., Ai, Aj]
+    jac = jax.jacrev(op_dense, 0, holomorphic=holomorphic)(A, b)[..., Ai, Aj]
     _log_and_test_equality(jac_sp, jac)
 
 

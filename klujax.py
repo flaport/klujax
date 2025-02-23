@@ -57,7 +57,7 @@ def dot(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
     """
     if any(x.dtype in COMPLEX_DTYPES for x in (Ax, x)):
         log("COMPLEX DOT")
-        result = dot_f64.bind(
+        result = dot_c128.bind(
             Ai.astype(jnp.int32),
             Aj.astype(jnp.int32),
             Ax.astype(jnp.complex128),
@@ -77,6 +77,7 @@ def dot(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
 # Primitives ==========================================================================
 
 dot_f64 = jax.extend.core.Primitive("dot_f64")
+dot_c128 = jax.extend.core.Primitive("dot_c128")
 
 # Implementations =====================================================================
 
@@ -85,6 +86,18 @@ dot_f64 = jax.extend.core.Primitive("dot_f64")
 def dot_f64_impl(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
     call = jax.ffi.ffi_call(
         "dot_f64",
+        jax.ShapeDtypeStruct(x.shape, x.dtype),
+    )
+    if not callable(call):
+        msg = "jax.ffi.ffi_call did not return a callable."
+        raise RuntimeError(msg)  # noqa: TRY004
+    return call(Ai, Aj, Ax, x)
+
+
+@dot_c128.def_impl
+def dot_c128_impl(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
+    call = jax.ffi.ffi_call(
+        "dot_c128",
         jax.ShapeDtypeStruct(x.shape, x.dtype),
     )
     if not callable(call):
@@ -104,10 +117,20 @@ jax.ffi.register_ffi_target(
 solve_f64_low = mlir.lower_fun(dot_f64_impl, multiple_results=False)
 mlir.register_lowering(dot_f64, solve_f64_low)
 
+jax.ffi.register_ffi_target(
+    "dot_c128",
+    klujax_cpp.dot_c128(),
+    platform="cpu",
+)
+
+solve_c128_low = mlir.lower_fun(dot_c128_impl, multiple_results=False)
+mlir.register_lowering(dot_c128, solve_c128_low)
+
 
 # Abstract Evals ======================================================================
 
 
+@dot_c128.def_abstract_eval
 @dot_f64.def_abstract_eval
 def general_abstract_eval(Ai: Array, Aj: Array, Ax: Array, b: Array) -> ShapedArray:  # noqa: ARG001
     return ShapedArray(b.shape, b.dtype)
@@ -120,25 +143,62 @@ def dot_f64_value_and_jvp(
     arg_values: tuple[Array, Array, Array, Array],
     arg_tangents: tuple[Array, Array, Array, Array],
 ) -> tuple[Array, Array]:
+    return _dot_value_and_jvp(dot_f64, arg_values, arg_tangents)
+
+
+ad.primitive_jvps[dot_f64] = dot_f64_value_and_jvp
+
+
+def dot_c128_value_and_jvp(
+    arg_values: tuple[Array, Array, Array, Array],
+    arg_tangents: tuple[Array, Array, Array, Array],
+) -> tuple[Array, Array]:
+    return _dot_value_and_jvp(dot_c128, arg_values, arg_tangents)
+
+
+ad.primitive_jvps[dot_c128] = dot_c128_value_and_jvp
+
+
+def _dot_value_and_jvp(
+    prim: jax.extend.core.Primitive,
+    arg_values: tuple[Array, Array, Array, Array],
+    arg_tangents: tuple[Array, Array, Array, Array],
+) -> tuple[Array, Array]:
     Ai, Aj, Ax, b = arg_values
     dAi, dAj, dAx, db = arg_tangents
     dAx = dAx if not isinstance(dAx, ad.Zero) else lax.zeros_like_array(Ax)
     dAi = dAi if not isinstance(dAi, ad.Zero) else lax.zeros_like_array(Ai)
     dAj = dAj if not isinstance(dAj, ad.Zero) else lax.zeros_like_array(Aj)
     db = db if not isinstance(db, ad.Zero) else lax.zeros_like_array(b)
-    x = dot_f64.bind(Ai, Aj, Ax, b)
-    dA_b = dot_f64.bind(Ai, Aj, dAx, b)
-    A_db = dot_f64.bind(Ai, Aj, Ax, db)
+    x = prim.bind(Ai, Aj, Ax, b)
+    dA_b = prim.bind(Ai, Aj, dAx, b)
+    A_db = prim.bind(Ai, Aj, Ax, db)
     return x, dA_b + A_db
-
-
-ad.primitive_jvps[dot_f64] = dot_f64_value_and_jvp
 
 
 # Batching (vmap) =====================================================================
 
 
 def dot_f64_vmap(
+    vector_arg_values: tuple[Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    return _general_vmap(dot_f64, vector_arg_values, batch_axes)
+
+
+def dot_c128_vmap(
+    vector_arg_values: tuple[Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    return _general_vmap(dot_c128, vector_arg_values, batch_axes)
+
+
+batching.primitive_batchers[dot_f64] = dot_f64_vmap
+batching.primitive_batchers[dot_c128] = dot_c128_vmap
+
+
+def _general_vmap(
+    prim: jax.extend.core.Primitive,
     vector_arg_values: tuple[Array, Array, Array, Array],
     batch_axes: tuple[int | None, int | None, int | None, int | None],
 ) -> tuple[Array, int]:
@@ -166,7 +226,7 @@ def dot_f64_vmap(
         shape = x.shape
         Ax = Ax.reshape(Ax.shape[0] * Ax.shape[1], Ax.shape[2])
         x = x.reshape(x.shape[0] * x.shape[1], x.shape[2], x.shape[3])
-        return dot_f64.bind(Ai, Aj, Ax, x).reshape(*shape), 0
+        return prim.bind(Ai, Aj, Ax, x).reshape(*shape), 0
     if aAx is not None:
         if Ax.ndim != 3 or x.ndim != 3:
             msg = (
@@ -181,7 +241,7 @@ def dot_f64_vmap(
         shape = x.shape
         Ax = Ax.reshape(Ax.shape[0] * Ax.shape[1], Ax.shape[2])
         x = x.reshape(x.shape[0] * x.shape[1], x.shape[2], x.shape[3])
-        return dot_f64.bind(Ai, Aj, Ax, x).reshape(*shape), 0
+        return prim.bind(Ai, Aj, Ax, x).reshape(*shape), 0
     if ax is not None:
         if Ax.ndim != 2 or x.ndim != 4:
             msg = (
@@ -193,17 +253,40 @@ def dot_f64_vmap(
         x = jnp.moveaxis(x, ax, 3)
         shape = x.shape
         x = x.reshape(x.shape[0], x.shape[1], x.shape[2] * x.shape[3])
-        return dot_f64.bind(Ai, Aj, Ax, x).reshape(*shape), 3
+        return prim.bind(Ai, Aj, Ax, x).reshape(*shape), 3
     msg = "vmap failed. Please select an axis to vectorize over."
     raise ValueError(msg)
 
-
-batching.primitive_batchers[dot_f64] = dot_f64_vmap
 
 # Transposition =======================================================================
 
 
 def dot_f64_transpose(
+    ct: Array,
+    Ai: Array,
+    Aj: Array,
+    Ax: Array,
+    x: Array,
+) -> tuple[Array, Array, Array, Array]:
+    return _dot_transpose(dot_f64, ct, Ai, Aj, Ax, x)
+
+
+def dot_c128_transpose(
+    ct: Array,
+    Ai: Array,
+    Aj: Array,
+    Ax: Array,
+    x: Array,
+) -> tuple[Array, Array, Array, Array]:
+    return _dot_transpose(dot_c128, ct, Ai, Aj, Ax, x)
+
+
+ad.primitive_transposes[dot_f64] = dot_f64_transpose
+ad.primitive_transposes[dot_c128] = dot_c128_transpose
+
+
+def _dot_transpose(
+    prim: jax.extend.core.Primitive,
     ct: Array,
     Ai: Array,
     Aj: Array,
@@ -220,7 +303,7 @@ def dot_f64_transpose(
 
     if ad.is_undefined_primal(x):
         # replace x by ct
-        return Aj, Ai, Ax, dot_f64.bind(Aj, Ai, Ax, ct)
+        return Aj, Ai, Ax, prim.bind(Aj, Ai, Ax, ct)
 
     if ad.is_undefined_primal(Ax):
         # replace Ax by ct
@@ -229,6 +312,3 @@ def dot_f64_transpose(
 
     msg = "No undefined primals in transpose."
     raise ValueError(msg)
-
-
-ad.primitive_transposes[dot_f64] = dot_f64_transpose
