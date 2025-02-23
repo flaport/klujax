@@ -11,18 +11,11 @@ namespace ffi = xla::ffi;
 
 #include <cstring>  // for memset
 
-ffi::Error _dot_f64(
-    ffi::Buffer<ffi::DataType::S32> Ai,
-    ffi::Buffer<ffi::DataType::S32> Aj,
-    ffi::Buffer<ffi::DataType::F64> Ax,
-    ffi::Buffer<ffi::DataType::F64> x,
-    ffi::Result<ffi::Buffer<ffi::DataType::F64>> b) {
-    const int *_Ai = Ai.typed_data();
-    const int *_Aj = Aj.typed_data();
-    const double *_Ax = Ax.typed_data();
-    const double *_x = x.typed_data();
-    double *_b = b->typed_data();
-
+ffi::Error validate_dot_f64_args(
+    const ffi::Buffer<ffi::DataType::S32> &Ai,
+    const ffi::Buffer<ffi::DataType::S32> &Aj,
+    const ffi::Buffer<ffi::DataType::F64> &Ax,
+    const ffi::Buffer<ffi::DataType::F64> &x) {
     auto ds_x = x.dimensions();
     int d_x = ds_x.size();
     if (d_x != 3) {
@@ -67,6 +60,47 @@ ffi::Error _dot_f64(
             "n_lhs mismatch: Aj.shape[0] != Ax.shape[1]: Got " + std::to_string(n_nz_bis) + " != " + std::to_string(n_nz));
     }
 
+    int i;
+    int j;
+    const int *_Ai = Ai.typed_data();
+    const int *_Aj = Aj.typed_data();
+    for (int n = 0; n < n_nz; n++) {
+        i = _Ai[n];
+        if (i >= n_col) {
+            return ffi::Error::InvalidArgument("Ai.max() >= n_col");
+        }
+        j = _Aj[n];
+        if (j >= n_col) {
+            return ffi::Error::InvalidArgument("Aj.max() >= n_col");
+        }
+    }
+    return ffi::Error::Success();
+}
+
+ffi::Error _dot_f64(
+    ffi::Buffer<ffi::DataType::S32> Ai,
+    ffi::Buffer<ffi::DataType::S32> Aj,
+    ffi::Buffer<ffi::DataType::F64> Ax,
+    ffi::Buffer<ffi::DataType::F64> x,
+    ffi::Result<ffi::Buffer<ffi::DataType::F64>> b) {
+    ffi::Error err = validate_dot_f64_args(Ai, Aj, Ax, x);
+    if (err.failure()) {
+        return err;
+    }
+
+    const int *_Ai = Ai.typed_data();
+    const int *_Aj = Aj.typed_data();
+    const double *_Ax = Ax.typed_data();
+    const double *_x = x.typed_data();
+    double *_b = b->typed_data();
+
+    auto ds_x = x.dimensions();
+    auto ds_Ax = Ax.dimensions();
+    int n_lhs = (int)ds_x[0];
+    int n_col = (int)ds_x[1];
+    int n_rhs = (int)ds_x[2];
+    int n_nz = (int)ds_Ax[1];
+
     // initialize empty result
     for (int i = 0; i < n_lhs * n_col * n_rhs; i++) {
         _b[i] = 0.0;
@@ -79,13 +113,7 @@ ffi::Error _dot_f64(
     int j;
     for (int n = 0; n < n_nz; n++) {
         i = _Ai[n];
-        if (i >= n_col) {
-            return ffi::Error::InvalidArgument("Ai.max() >= n_col");
-        }
         j = _Aj[n];
-        if (j >= n_col) {
-            return ffi::Error::InvalidArgument("Aj.max() >= n_col");
-        }
         for (int m = 0; m < n_lhs; m++) {
             for (int k = 0; k < n_rhs; k++) {
                 _b[m * n_col * n_rhs + i * n_rhs + k] += _Ax[m * n_nz + n] * _x[m * n_col * n_rhs + j * n_rhs + k];
