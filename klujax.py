@@ -41,6 +41,39 @@ COMPLEX_DTYPES = (
 
 
 @jax.jit
+def solve(Ai: Array, Aj: Array, Ax: Array, b: Array) -> Array:
+    """
+    Solve for x in the sparse linear system Ax=b.
+
+    Args:
+        Ai: [n_nz; int32]: the row indices of the sparse matrix A
+        Aj: [n_nz; int32]: the column indices of the sparse matrix A
+        Ax: [n_lhs? x n_nz; float64|complex128]: the values of the sparse matrix A
+        b:  [n_lhs? x n_col x n_rhs?; float64|complex128]: the target vector
+
+    Returns:
+        x: the result (x≈A^-1b)
+
+    """
+    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
+        result = solve_f64.bind(
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            Ax.astype(jnp.complex128),
+            b.astype(jnp.complex128),
+        )
+    else:
+        result = solve_f64.bind(
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            Ax.astype(jnp.float64),
+            b.astype(jnp.float64),
+        )
+
+    return result
+
+
+@jax.jit
 def dot(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
     """
     Multiply a sparse matrix with a vector: Ax=b.
@@ -78,6 +111,7 @@ def dot(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
 
 dot_f64 = jax.extend.core.Primitive("dot_f64")
 dot_c128 = jax.extend.core.Primitive("dot_c128")
+solve_f64 = jax.extend.core.Primitive("solve_f64")
 
 # Implementations =====================================================================
 
@@ -106,6 +140,18 @@ def dot_c128_impl(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
     return call(Ai, Aj, Ax, x)
 
 
+@solve_f64.def_impl
+def solve_f64_impl(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
+    call = jax.ffi.ffi_call(
+        "solve_f64",
+        jax.ShapeDtypeStruct(x.shape, x.dtype),
+    )
+    if not callable(call):
+        msg = "jax.ffi.ffi_call did not return a callable."
+        raise RuntimeError(msg)  # noqa: TRY004
+    return call(Ai, Aj, Ax, x)
+
+
 # Lowerings ===========================================================================
 
 jax.ffi.register_ffi_target(
@@ -114,8 +160,8 @@ jax.ffi.register_ffi_target(
     platform="cpu",
 )
 
-solve_f64_low = mlir.lower_fun(dot_f64_impl, multiple_results=False)
-mlir.register_lowering(dot_f64, solve_f64_low)
+dot_f64_low = mlir.lower_fun(dot_f64_impl, multiple_results=False)
+mlir.register_lowering(dot_f64, dot_f64_low)
 
 jax.ffi.register_ffi_target(
     "dot_c128",
@@ -123,15 +169,24 @@ jax.ffi.register_ffi_target(
     platform="cpu",
 )
 
-solve_c128_low = mlir.lower_fun(dot_c128_impl, multiple_results=False)
-mlir.register_lowering(dot_c128, solve_c128_low)
+dot_c128_low = mlir.lower_fun(dot_c128_impl, multiple_results=False)
+mlir.register_lowering(dot_c128, dot_c128_low)
 
+jax.ffi.register_ffi_target(
+    "solve_f64",
+    klujax_cpp.solve_f64(),
+    platform="cpu",
+)
+
+solve_f64_low = mlir.lower_fun(solve_f64_impl, multiple_results=False)
+mlir.register_lowering(solve_f64, solve_f64_low)
 
 # Abstract Evals ======================================================================
 
 
-@dot_c128.def_abstract_eval
 @dot_f64.def_abstract_eval
+@dot_c128.def_abstract_eval
+@solve_f64.def_abstract_eval
 def general_abstract_eval(Ai: Array, Aj: Array, Ax: Array, b: Array) -> ShapedArray:  # noqa: ARG001
     return ShapedArray(b.shape, b.dtype)
 
@@ -157,6 +212,26 @@ def dot_c128_value_and_jvp(
 
 
 ad.primitive_jvps[dot_c128] = dot_c128_value_and_jvp
+
+
+def solve_f64_value_and_jvp(
+    arg_values: tuple[Array, Array, Array, Array],
+    arg_tangents: tuple[Array, Array, Array, Array],
+) -> tuple[Array, Array]:
+    Ai, Aj, Ax, b = arg_values
+    dAi, dAj, dAx, db = arg_tangents
+    dAx = dAx if not isinstance(dAx, ad.Zero) else lax.zeros_like_array(Ax)
+    dAi = dAi if not isinstance(dAi, ad.Zero) else lax.zeros_like_array(Ai)
+    dAj = dAj if not isinstance(dAj, ad.Zero) else lax.zeros_like_array(Aj)
+    db = db if not isinstance(db, ad.Zero) else lax.zeros_like_array(b)
+    x = solve_f64.bind(Ai, Aj, Ax, b)
+    dA_x = dot_f64.bind(Ai, Aj, dAx, x)
+    invA_dA_x = solve_f64.bind(Ai, Aj, Ax, dA_x)
+    invA_db = solve_f64.bind(Ai, Aj, Ax, db)
+    return x, -invA_dA_x + invA_db
+
+
+ad.primitive_jvps[solve_f64] = solve_f64_value_and_jvp
 
 
 def _dot_value_and_jvp(
@@ -186,6 +261,9 @@ def dot_f64_vmap(
     return _general_vmap(dot_f64, vector_arg_values, batch_axes)
 
 
+batching.primitive_batchers[dot_f64] = dot_f64_vmap
+
+
 def dot_c128_vmap(
     vector_arg_values: tuple[Array, Array, Array, Array],
     batch_axes: tuple[int | None, int | None, int | None, int | None],
@@ -193,8 +271,17 @@ def dot_c128_vmap(
     return _general_vmap(dot_c128, vector_arg_values, batch_axes)
 
 
-batching.primitive_batchers[dot_f64] = dot_f64_vmap
 batching.primitive_batchers[dot_c128] = dot_c128_vmap
+
+
+def solve_f64_vmap(
+    vector_arg_values: tuple[Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    return _general_vmap(solve_f64, vector_arg_values, batch_axes)
+
+
+batching.primitive_batchers[solve_f64] = solve_f64_vmap
 
 
 def _general_vmap(
@@ -271,6 +358,9 @@ def dot_f64_transpose(
     return _dot_transpose(dot_f64, ct, Ai, Aj, Ax, x)
 
 
+ad.primitive_transposes[dot_f64] = dot_f64_transpose
+
+
 def dot_c128_transpose(
     ct: Array,
     Ai: Array,
@@ -281,8 +371,33 @@ def dot_c128_transpose(
     return _dot_transpose(dot_c128, ct, Ai, Aj, Ax, x)
 
 
-ad.primitive_transposes[dot_f64] = dot_f64_transpose
 ad.primitive_transposes[dot_c128] = dot_c128_transpose
+
+
+def solve_f64_transpose(
+    ct: Array,
+    Ai: Array,
+    Aj: Array,
+    Ax: Array,
+    b: Array,
+) -> tuple[Array, Array, Array, Array]:
+    if ad.is_undefined_primal(Ai) or ad.is_undefined_primal(Aj):
+        msg = "Sparse indices Ai and Aj should not require gradients."
+        raise ValueError(msg)
+
+    if ad.is_undefined_primal(b):
+        b_bar = solve_f64.bind(Aj, Ai, Ax, ct)  # Swap Ai, Aj to apply A^T
+        return Ai, Aj, Ax, b_bar
+
+    if ad.is_undefined_primal(Ax):
+        Ax_bar = -(ct * solve_f64.bind(Ai, Aj, Ax, b)).sum(-1)
+        return Ai, Aj, Ax_bar, b
+
+    msg = "No undefined primals in transpose."
+    raise ValueError(msg)
+
+
+ad.primitive_transposes[solve_f64] = solve_f64_transpose
 
 
 def _dot_transpose(
@@ -293,12 +408,8 @@ def _dot_transpose(
     Ax: Array,
     x: Array,
 ) -> tuple[Array, Array, Array, Array]:
-    if ad.is_undefined_primal(Ai):
-        msg = "Found undefined primal for Ai."
-        raise ValueError(msg)
-
-    if ad.is_undefined_primal(Aj):
-        msg = "Found undefined primal for Aj."
+    if ad.is_undefined_primal(Ai) or ad.is_undefined_primal(Aj):
+        msg = "Sparse indices Ai and Aj should not require gradients."
         raise ValueError(msg)
 
     if ad.is_undefined_primal(x):

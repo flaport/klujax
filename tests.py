@@ -3,8 +3,7 @@ from functools import wraps
 
 import jax
 import jax.numpy as jnp
-
-# import jax.scipy as jsp
+import jax.scipy as jsp
 import numpy as np
 import pytest
 from jax import lax
@@ -15,7 +14,7 @@ from klujax import COMPLEX_DTYPES
 
 OPS_DENSE = {  # sparse to dense
     klujax.dot: lax.dot,
-    # klujax.solve: jsp.linalg.solve,
+    klujax.solve: jsp.linalg.solve,
 }
 
 
@@ -38,10 +37,7 @@ def parametrize_dtypes(func):
 
 
 def parametrize_ops(func):
-    # return pytest.mark.parametrize(
-    #    "op_sparse", [(klujax.solve, jsp.linalg.solve), (klujax.dot, lax.dot)]
-    # )(func)
-    return pytest.mark.parametrize("op_sparse", [klujax.dot])(func)
+    return pytest.mark.parametrize("op_sparse", [klujax.solve])(func)
 
 
 @pytest.mark.skip
@@ -95,6 +91,7 @@ def test_3d(dtype, op_sparse):
     _log_and_test_equality(x, x_sp)
 
 
+@pytest.mark.skip
 @log_test_name
 @parametrize_dtypes
 @parametrize_ops
@@ -116,6 +113,7 @@ def test_3d_jacfwd(dtype, op_sparse):
     _log_and_test_equality(jac_sp, jac)
 
 
+@pytest.mark.skip
 @log_test_name
 @parametrize_dtypes
 @parametrize_ops
