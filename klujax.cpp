@@ -73,12 +73,22 @@ ffi::Error _dot_f64(
     }
 
     // fill result (all multi-dim arrays are row-major)
-    // x_mik = A_mij × x_mjk
+    // x_mik = A_mij × x_mjk (einsum)
     // sizes: m<n_lhs; i<n_col<--Ai; j<n_col<--Aj; k<n_rhs
+    int i;
+    int j;
     for (int n = 0; n < n_nz; n++) {
+        i = _Ai[n];
+        if (i >= n_col) {
+            return ffi::Error::InvalidArgument("Ai.max() >= n_col");
+        }
+        j = _Aj[n];
+        if (j >= n_col) {
+            return ffi::Error::InvalidArgument("Aj.max() >= n_col");
+        }
         for (int m = 0; m < n_lhs; m++) {
             for (int k = 0; k < n_rhs; k++) {
-                _b[m * n_col * n_rhs + _Ai[n] * n_rhs + k] += _Ax[m * n_nz + n] * _x[m * n_col * n_rhs + _Aj[n] * n_rhs + k];
+                _b[m * n_col * n_rhs + i * n_rhs + k] += _Ax[m * n_nz + n] * _x[m * n_col * n_rhs + j * n_rhs + k];
             }
         }
     }
