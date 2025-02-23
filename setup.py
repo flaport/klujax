@@ -1,4 +1,4 @@
-""" KLUJAX Setup. """
+"""KLUJAX Setup."""
 
 import os
 import site
@@ -58,7 +58,8 @@ elif sys.platform == "darwin":  # MacOS: clang
         language="c++",
     )
 else:
-    raise RuntimeError(f"Platform {sys.platform} not supported.")
+    msg = f"Platform {sys.platform} not supported."
+    raise RuntimeError(msg)
 
 
 # Custom BuildExt to enable combined build of C and C++ files on MacOs (clang)

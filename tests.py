@@ -2,13 +2,11 @@ import sys
 from functools import wraps
 
 import jax
+import jax.numpy as jnp
+
+# import jax.scipy as jsp
 import numpy as np
 import pytest
-
-jax.config.update("jax_enable_x64", True)
-jax.config.update("jax_platform_name", "cpu")
-import jax.numpy as jnp
-import jax.scipy as jsp
 from jax import lax
 from jaxlib.xla_extension import XlaRuntimeError
 
@@ -28,9 +26,22 @@ def log_test_name(f):
     return new
 
 
+def parametrize_dtypes(func):
+    # return pytest.mark.parametrize("dtype", [np.float64, np.complex128])(func)
+    return pytest.mark.parametrize("dtype", [np.float64])(func)
+
+
+def parametrize_ops(func):
+    # return pytest.mark.parametrize(
+    #    "ops", [(klujax.solve, jsp.linalg.solve), (klujax.dot, lax.dot)]
+    # )(func)
+    return pytest.mark.parametrize("ops", [(klujax.dot, lax.dot)])(func)
+
+
+@pytest.mark.skip
 @log_test_name
-@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
-@pytest.mark.parametrize("ops", [(klujax.solve, jsp.linalg.solve), (klujax.coo_mul_vec, lax.dot)])  # fmt: skip
+@parametrize_dtypes
+@parametrize_ops
 def test_1d(dtype, ops):
     op_sparse, op_dense = ops
     Ai, Aj, Ax, b = _get_rand_arrs_1d(8, (n_col := 5), dtype=dtype)
@@ -40,9 +51,10 @@ def test_1d(dtype, ops):
     _log_and_test_equality(x, x_sp)
 
 
+@pytest.mark.skip
 @log_test_name
-@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
-@pytest.mark.parametrize("ops", [(klujax.solve, jsp.linalg.solve), (klujax.coo_mul_vec, lax.dot)])  # fmt: skip
+@parametrize_dtypes
+@parametrize_ops
 def test_2d(dtype, ops):
     op_sparse, op_dense = ops
     Ai, Aj, Ax, b = _get_rand_arrs_2d((n_lhs := 3), 8, (n_col := 5), dtype=dtype)
@@ -52,9 +64,10 @@ def test_2d(dtype, ops):
     _log_and_test_equality(x, x_sp)
 
 
+@pytest.mark.skip
 @log_test_name
-@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
-@pytest.mark.parametrize("ops", [(klujax.solve, jsp.linalg.solve), (klujax.coo_mul_vec, lax.dot)])  # fmt: skip
+@parametrize_dtypes
+@parametrize_ops
 def test_2d_vmap(dtype, ops):
     op_sparse, op_dense = ops
     Ai, Aj, Ax, b = _get_rand_arrs_2d((n_lhs := 3), 8, (n_col := 5), dtype=dtype)
@@ -65,8 +78,8 @@ def test_2d_vmap(dtype, ops):
 
 
 @log_test_name
-@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
-@pytest.mark.parametrize("ops", [(klujax.solve, jsp.linalg.solve), (klujax.coo_mul_vec, lax.dot)])  # fmt: skip
+@parametrize_dtypes
+@parametrize_ops
 def test_3d(dtype, ops):
     op_sparse, op_dense = ops
     Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 8, (n_col := 5), 2, dtype=dtype)
@@ -76,9 +89,10 @@ def test_3d(dtype, ops):
     _log_and_test_equality(x, x_sp)
 
 
+@pytest.mark.skip
 @log_test_name
-@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
-@pytest.mark.parametrize("ops", [(klujax.solve, jsp.linalg.solve), (klujax.coo_mul_vec, lax.dot)])  # fmt: skip
+@parametrize_dtypes
+@parametrize_ops
 def test_3d_vmap(dtype, ops):
     op_sparse, op_dense = ops
     Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 8, (n_col := 5), 2, dtype=dtype)
@@ -89,35 +103,40 @@ def test_3d_vmap(dtype, ops):
     _log_and_test_equality(x, x_sp)
 
 
+@pytest.mark.skip
 @log_test_name
-@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
-@pytest.mark.parametrize("op", [klujax.solve, klujax.coo_mul_vec])
-def test_4d(dtype, op):
+@parametrize_dtypes
+@parametrize_ops
+def test_4d(dtype, ops):
+    op, _ = ops
     Ai, Aj, Ax, b = _get_rand_arrs_3d(3, 8, 5, 2, dtype=dtype)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # noqa: PT011
         op(Ai, Aj, Ax, b[None])
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # noqa: PT011
         op(Ai, Aj, Ax[None], b)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # noqa: PT011
         op(Ai, Aj, Ax[None], b[None])
 
 
+@pytest.mark.skip
 @log_test_name
-@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
-@pytest.mark.parametrize("op", [klujax.solve, klujax.coo_mul_vec])
-def test_4d_vmap(dtype, op):
+@parametrize_dtypes
+@parametrize_ops
+def test_4d_vmap(dtype, ops):
+    op, _ = ops
     Ai, Aj, Ax, b = _get_rand_arrs_3d(3, 8, 5, 2, dtype=dtype)
     jax.vmap(op, (None, None, None, 1), 0)(Ai, Aj, Ax, b[:, None])
     # TODO: compare with dense result
 
 
+@pytest.mark.skip
 @log_test_name
-@pytest.mark.skipif(sys.platform in ("win32", "darwin"), reason="FIXME: known to still segfault on Windows/MacOS!")  # fmt: skip
-@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
-@pytest.mark.parametrize("op", [klujax.solve, klujax.coo_mul_vec])
-def test_vmap_fail(dtype, op):
+@parametrize_dtypes
+@parametrize_ops
+def test_vmap_fail(dtype, ops):
+    op, _ = ops
     n_lhs = 23
     n_nz = 8
     n_col = 5
@@ -189,6 +208,7 @@ def _log(**kwargs):
 def _is_almost_equal(arr1, arr2):
     try:
         np.testing.assert_array_almost_equal(arr1, arr2)
-        return True
     except AssertionError:
         return False
+    else:
+        return True

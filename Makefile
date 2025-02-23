@@ -1,12 +1,17 @@
 dist:
 	python setup.py build sdist bdist_wheel
 
+.PHONY: build
+dev:
+	uv venv --python 3.13
+	uv sync --all-extras
+	python setup.py build_ext --inplace
+
+inplace:
+	python setup.py build_ext --inplace
+
 test:
 	pytest tests.py
-
-.PHONY: build
-build:
-	python setup.py build_ext --inplace
 
 .PHONY: suitesparse
 suitesparse:
@@ -36,5 +41,3 @@ clean:
 	find . -name ".ipynb_checkpoints" | xargs rm -rf
 	find . -name ".pytest_cache" | xargs rm -rf
 
-env:
-	@echo export CPLUS_INCLUDE_PATH='/home/flaport/Projects/klujax/xla:/home/flaport/.anaconda/include/python3.12:/home/flaport/.anaconda/lib/python3.12/site-packages/pybind11/include:/home/flaport/Projects/klujax/suitesparse/SuiteSparse_config:/home/flaport/Projects/klujax/suitesparse/AMD/Include:/home/flaport/Projects/klujax/suitesparse/COLAMD/Include:/home/flaport/Projects/klujax/suitesparse/BTF/Include:/home/flaport/Projects/klujax/suitesparse/KLU/Include'
