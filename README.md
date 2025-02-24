@@ -18,6 +18,9 @@ Note that `float32`/`complex64` arrays will be cast to `float64`/`complex128`!
 The `klujax` library provides a single function `solve(Ai, Aj, Ax, b)`, which solves for `x` in
 the sparse linear system `Ax=b`, where `A` is explicitly given in COO-format (`Ai`, `Aj`, `Ax`).
 
+> NOTE: the sparse matrix represented by (`Ai`, `Aj`, `Ax`) needs to be [coalesced](https://pytorch.org/docs/stable/sparse.html#uncoalesced-sparse-coo-tensors)!
+> KLUJAX provides a `coalesce` function (which unfortunately is not jax-jittable).
+
 Supported shapes (`?` suffix means optional):
 
 - `Ai`: `(n_nz,)`
@@ -26,9 +29,20 @@ Supported shapes (`?` suffix means optional):
 - `b`: `(n_lhs?, n_col, n_rhs?)`
 - `A` (represented by (`Ai`, `Aj`, `Ax`)): (`n_lhs?`, `n_col`, `n_col`)
 
-Note that the sparse matrix represented by (`Ai`, `Aj`, `Ax`) needs to be
-[coalesced](https://pytorch.org/docs/stable/sparse.html#uncoalesced-sparse-coo-tensors).
-KLUJAX has a `coalesce` function (which unfortunately is not jax-jittable).
+KLUJAX will automatically select a sensible way to act on underdefined dimensions of Ax
+and b:
+
+| dim(Ax) | dim(b) | assumed shape(Ax) | assumed shape(b)      |
+| ------- | ------ | ----------------- | --------------------- |
+| 1D      | 1D     | n_nz              | n_col                 |
+| 1D      | 2D     | n_nz              | n_col x n_rhs         |
+| 1D      | 3D     | n_nz              | n_lhs x n_col x n_rhs |
+| 2D      | 1D     | n_lhs x n_nz      | n_col                 |
+| 2D      | 2D     | n_lhs x n_nz      | n_lhs x n_col         |
+| 2D      | 3D     | n_lhs x n_nz      | n_lhs x n_col x n_rhs |
+
+Where the `A` is always acting on the `n_col` dimension of `b`. The `n_lhs` dim is a
+shared batch dimension between `A` and `b`.
 
 Additional dimensions can be added with `jax.vmap` (alternatively any higher dimensional
 problem can be reduced to the one above by properly transposing and reshaping `Ax` and `b`).
