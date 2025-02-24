@@ -3,6 +3,7 @@
 *.cover
 *.egg
 *.egg-info
+*.ipynb
 *.log
 *.manifest
 *.mo

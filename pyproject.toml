@@ -29,12 +29,13 @@ version = "0.3.1"
 
 [project.optional-dependencies]
 dev = [
+  "build>=1.2.2",
+  "ipykernel>=6.29.5",
   "pre-commit>=4.1.0",
   "pytest>=8.3.4",
   "ruff>=0.9.7",
-  "tbump>=6.11.0",
   "setuptools>=75.8.0",
-  "build>=1.2.2"
+  "tbump>=6.11.0"
 ]
 
 [tool.pytest.ini_options]
