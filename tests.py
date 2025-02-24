@@ -84,7 +84,7 @@ def test_2d_vmap(dtype, op_sparse):
 @parametrize_ops
 def test_3d(dtype, op_sparse):
     op_dense = jax.vmap(OPS_DENSE[op_sparse], (0, 0), 0)
-    Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 15, (n_col := 5), 1, dtype=dtype)
+    Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 2), 8, (n_col := 3), 4, dtype=dtype)
     x_sp = op_sparse(Ai, Aj, Ax, b)
     A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
     x = op_dense(A, b)
