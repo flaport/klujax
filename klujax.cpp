@@ -296,9 +296,9 @@ ffi::Error solve_f64(
     }
 
     // copy _x_temp into _x and transpose the last two dimensions since JAX expects row-major layout
-    // NOTE: it feels a bit weird to have to do all this transposing here. This might actually be
-    // pretty inefficient. Ideally I'd like to get rid of this transpose. Maybe just represent b/x
-    // in python as n_lhs x n_rhs x n_col in stead of n_lhs x n_col x n_rhs?
+    // NOTE: it feels a bit weird to have to do all this copying and transposing here. This might actually be
+    // pretty inefficient. Ideally I'd like to get rid of this transpose. Maybe just represent b/x in python
+    // as n_lhs x n_rhs x n_col in stead of n_lhs x n_col x n_rhs?
     for (int m = 0; m < n_lhs; m++) {
         for (int n = 0; n < n_col; n++) {
             for (int p = 0; p < n_rhs; p++) {
@@ -329,6 +329,108 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(  // b = A x
         .Ret<ffi::Buffer<ffi::DataType::F64>>()  // b
 );
 
+ffi::Error solve_c128(
+    ffi::Buffer<ffi::DataType::S32> Ai,
+    ffi::Buffer<ffi::DataType::S32> Aj,
+    ffi::Buffer<ffi::DataType::C128> Ax,
+    ffi::Buffer<ffi::DataType::C128> b,
+    ffi::Result<ffi::Buffer<ffi::DataType::C128>> x) {
+    auto ds_b = b.dimensions();
+    auto ds_Ax = Ax.dimensions();
+    ffi::Error err = validate_dot_f64_args(Ai, Aj, ds_Ax, ds_b);
+    if (err.failure()) {
+        return err;
+    }
+
+    int n_lhs = (int)ds_b[0];
+    int n_col = (int)ds_b[1];
+    int n_rhs = (int)ds_b[2];
+    int n_nz = (int)ds_Ax[1];
+    const int *_Ai = Ai.typed_data();
+    const int *_Aj = Aj.typed_data();
+    const double *_Ax = (double *)Ax.typed_data();
+    const double *_b = (double *)b.typed_data();
+    double *_x = (double *)x->typed_data();
+
+    // get COO -> CSC transformation information
+    int *_Bk = new int[n_nz]();  // Ax -> Bx transformation indices
+    int *_Bi = new int[n_nz]();
+    int *_Bp = new int[n_col + 1]();
+    double *_Bx = new double[2 * n_nz]();
+
+    coo_to_csc_analyze(n_col, n_nz, _Ai, _Aj, _Bi, _Bp, _Bk);
+
+    // copy _b into _x_temp and transpose the last two dimensions since KLU expects col-major layout
+    // _b itself won't be used anymore. KLU works on _x_temp in-place.
+    double *_x_temp = new double[n_lhs * n_col * n_rhs]();
+    for (int m = 0; m < n_lhs; m++) {
+        for (int n = 0; n < n_col; n++) {
+            for (int p = 0; p < n_rhs; p++) {
+                _x_temp[2 * (m * n_rhs * n_col + p * n_col + n)] = _b[2 * (m * n_col * n_rhs + n * n_rhs + p)];
+                _x_temp[2 * (m * n_rhs * n_col + p * n_col + n) + 1] = _b[2 * (m * n_col * n_rhs + n * n_rhs + p) + 1];
+            }
+        }
+    }
+
+    // initialize KLU for given sparsity pattern
+    klu_symbolic *Symbolic;
+    klu_numeric *Numeric;
+    klu_common Common;
+    klu_defaults(&Common);
+    Symbolic = klu_analyze(n_col, _Bp, _Bi, &Common);
+
+    // solve for all elements in batch:
+    // NOTE: same sparsity pattern for each element in batch assumed
+    for (int i = 0; i < n_lhs; i++) {
+        int m = i * n_nz;
+        int n = i * n_rhs * n_col;
+
+        // convert COO Ax to CSC Bx
+        for (int k = 0; k < n_nz; k++) {
+            _Bx[2 * k] = _Ax[2 * (m + _Bk[k])];
+            _Bx[2 * k + 1] = _Ax[2 * (m + _Bk[k]) + 1];
+        }
+
+        // solve using KLU
+        Numeric = klu_z_factor(_Bp, _Bi, _Bx, Symbolic, &Common);
+        klu_z_solve(Symbolic, Numeric, n_col, n_rhs, &_x_temp[2 * n], &Common);
+    }
+
+    // copy _x_temp into _x and transpose the last two dimensions since JAX expects row-major layout
+    // NOTE: it feels a bit weird to have to do all this copying and transposing here. This might actually be
+    // pretty inefficient. Ideally I'd like to get rid of this transpose. Maybe just represent b/x in python
+    // as n_lhs x n_rhs x n_col in stead of n_lhs x n_col x n_rhs?
+    for (int m = 0; m < n_lhs; m++) {
+        for (int n = 0; n < n_col; n++) {
+            for (int p = 0; p < n_rhs; p++) {
+                _x[2 * (m * n_col * n_rhs + n * n_rhs + p)] = _x_temp[2 * (m * n_rhs * n_col + p * n_col + n)];
+                _x[2 * (m * n_col * n_rhs + n * n_rhs + p) + 1] = _x_temp[2 * (m * n_rhs * n_col + p * n_col + n) + 1];
+            }
+        }
+    }
+
+    // clean up
+    klu_free_symbolic(&Symbolic, &Common);
+    klu_free_numeric(&Numeric, &Common);
+    delete[] _Bk;
+    delete[] _Bi;
+    delete[] _Bp;
+    delete[] _Bx;
+    delete[] _x_temp;
+
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(  // b = A x
+    solve_c128_handler, solve_c128,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()   // Ai
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()   // Aj
+        .Arg<ffi::Buffer<ffi::DataType::C128>>()  // Ax
+        .Arg<ffi::Buffer<ffi::DataType::C128>>()  // x
+        .Ret<ffi::Buffer<ffi::DataType::C128>>()  // b
+);
+
 // Python wrappers
 PYBIND11_MODULE(klujax_cpp, m) {
     m.def("dot_f64",
@@ -337,4 +439,6 @@ PYBIND11_MODULE(klujax_cpp, m) {
           []() { return py::capsule((void *)&dot_c128_handler); });
     m.def("solve_f64",
           []() { return py::capsule((void *)&solve_f64_handler); });
+    m.def("solve_c128",
+          []() { return py::capsule((void *)&solve_c128_handler); });
 }
