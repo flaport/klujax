@@ -90,7 +90,7 @@ void coo_to_csc_analyze(
     // cumsum the n_nz per row to get Bp
     int cumsum = 0;
     int temp = 0;
-    for (int j = 0; j < n_col; j++) {
+    for (int j = 0; j <= n_col; j++) {
         temp = Bp[j];
         Bp[j] = cumsum;
         cumsum += temp;

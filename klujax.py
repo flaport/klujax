@@ -83,7 +83,7 @@ def dot(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
         x:  [n_lhs? x n_col x n_rhs?; float64|complex128]: the vector multiplied by A
 
     Returns:
-        b: the result of the multiplication (b=Ax)
+        b: the result (b=A@x)
 
     """
     if any(x.dtype in COMPLEX_DTYPES for x in (Ax, x)):
