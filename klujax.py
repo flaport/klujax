@@ -265,7 +265,7 @@ def solve_f64_value_and_jvp(
     arg_values: tuple[Array, Array, Array, Array],
     arg_tangents: tuple[Array, Array, Array, Array],
 ) -> tuple[Array, Array]:
-    return solve_value_and_jvp(solve_f64, arg_values, arg_tangents)
+    return solve_value_and_jvp(solve_f64, dot_f64, arg_values, arg_tangents)
 
 
 ad.primitive_jvps[solve_f64] = solve_f64_value_and_jvp
@@ -275,14 +275,15 @@ def solve_c128_value_and_jvp(
     arg_values: tuple[Array, Array, Array, Array],
     arg_tangents: tuple[Array, Array, Array, Array],
 ) -> tuple[Array, Array]:
-    return solve_value_and_jvp(solve_c128, arg_values, arg_tangents)
+    return solve_value_and_jvp(solve_c128, dot_c128, arg_values, arg_tangents)
 
 
 ad.primitive_jvps[solve_c128] = solve_c128_value_and_jvp
 
 
 def solve_value_and_jvp(
-    prim: jax.extend.core.Primitive,
+    prim_solve: jax.extend.core.Primitive,
+    prim_dot: jax.extend.core.Primitive,
     arg_values: tuple[Array, Array, Array, Array],
     arg_tangents: tuple[Array, Array, Array, Array],
 ) -> tuple[Array, Array]:
@@ -292,10 +293,10 @@ def solve_value_and_jvp(
     dAi = dAi if not isinstance(dAi, ad.Zero) else lax.zeros_like_array(Ai)
     dAj = dAj if not isinstance(dAj, ad.Zero) else lax.zeros_like_array(Aj)
     db = db if not isinstance(db, ad.Zero) else lax.zeros_like_array(b)
-    x = prim.bind(Ai, Aj, Ax, b)
-    dA_x = prim.bind(Ai, Aj, dAx, x)
-    invA_dA_x = prim.bind(Ai, Aj, Ax, dA_x)
-    invA_db = prim.bind(Ai, Aj, Ax, db)
+    x = prim_solve.bind(Ai, Aj, Ax, b)
+    dA_x = prim_dot.bind(Ai, Aj, dAx, x)
+    invA_dA_x = prim_solve.bind(Ai, Aj, Ax, dA_x)
+    invA_db = prim_solve.bind(Ai, Aj, Ax, db)
     return x, -invA_dA_x + invA_db
 
 

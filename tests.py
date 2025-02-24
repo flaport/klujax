@@ -33,7 +33,7 @@ def log_test_name(f):
 
 def parametrize_dtypes(func):
     # return pytest.mark.parametrize("dtype", [np.float64, np.complex128])(func)
-    return pytest.mark.parametrize("dtype", [np.float64])(func)
+    return pytest.mark.parametrize("dtype", [np.complex128])(func)
 
 
 def parametrize_ops(func):
@@ -112,7 +112,6 @@ def test_3d_jacfwd(dtype, op_sparse):
     _log_and_test_equality(jac_sp, jac)
 
 
-@pytest.mark.skip
 @log_test_name
 @parametrize_dtypes
 @parametrize_ops
