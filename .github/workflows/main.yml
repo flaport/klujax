@@ -5,7 +5,7 @@ on:
       - "[0-9]*.[0-9]*.[0-9]*"
 
 jobs:
-  build_wheels:
+  build-wheels:
     name: Build wheels on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -14,18 +14,15 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
-      - uses: actions/checkout@v3
-
+      - name: Checkout
+        uses: actions/checkout@v3
       - name: Clone Suitesparse
         run: make suitesparse
-
       - name: Clone XLA
         run: make xla
-
       - name: Clone Pybind11
         run: make pybind11
-
-      - name: Build wheels
+      - name: Build Wheels
         uses: pypa/cibuildwheel@v2.21.3
         env:
           CIBW_ARCHS_MACOS: arm64
@@ -34,35 +31,44 @@ jobs:
           CIBW_SKIP: "*-musllinux* pp*"
           CIBW_BEFORE_TEST: "pip install pytest"
           CIBW_TEST_COMMAND: "python {project}/.github/run_tests.py"
-
-      - uses: actions/upload-artifact@v3
+      - name: Upload Wheels
+        uses: actions/upload-artifact@v4
         with:
+          name: wheels-${{ matrix.os }}
           path: ./wheelhouse/*.whl
+          overwrite: true
 
   release:
     name: Create Release
-    needs: [build_wheels]
+    needs:
+      - build-wheels
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/setup-python@v4
+      - name: Python Setup
+        uses: actions/setup-python@v4
         with:
           python-version: "3.x"
-
-      - uses: actions/download-artifact@v3
+      - name: Download Linux Wheels
+        uses: actions/download-artifact@v4
         with:
-          name: artifact
+          name: wheels-ubuntu-latest
           path: dist
-
-      - name: Show dist contents
-        run: ls dist
-
-      - name: Release
-        uses: softprops/action-gh-release@v1
+      - name: Download Windows Wheels
+        uses: actions/download-artifact@v4
         with:
-          files: dist/*
-
-      - uses: pypa/gh-action-pypi-publish@release/v1
+          name: wheels-windows-latest
+          path: dist
+      - name: Download MacOS Wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: wheels-macos-latest
+          path: dist
+      - name: Release to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
           user: __token__
           password: ${{ secrets.PYPI_TOKEN }}
+      - name: Release to GitHub
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*

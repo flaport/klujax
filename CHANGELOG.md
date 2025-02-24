@@ -8,6 +8,7 @@
 - No more hidden segfaults (hopefully)
 - More consistent array shape broadcasting
 - Drop support for x86 MacOS (not supported by jax>=0.5.0 either)
+- Update GitHub CI
 
 ## 0.3.1
 
