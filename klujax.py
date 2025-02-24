@@ -4,7 +4,7 @@
 
 __version__ = "0.3.1"
 __author__ = "Floris Laporte"
-__all__ = []
+__all__ = ["coalesce", "dot", "solve"]
 
 # Imports =============================================================================
 
@@ -105,6 +105,76 @@ def dot(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
             x.astype(jnp.float64),
         )
     return result
+
+
+# @jax.jit
+# def coalesce(Ai: Array, Aj: Array, Ax: Array) -> tuple[Array, Array, Array]:
+#    """ Coalesce a sparse matrix by summing duplicate indices.
+#
+#    Args:
+#        Ai: [n_nz; int32]: the row indices of the sparse matrix A
+#        Aj: [n_nz; int32]: the column indices of the sparse matrix A
+#        Ax: [... x n_nz; float64|complex128]: the values of the sparse matrix A
+#
+#    Returns:
+#        coalesced Ai, Aj, Ax
+#    """
+#    # adapted from scipy.sparse.coo_matrix._sum_duplicates
+#    shape = Ax.shape
+#    Ax = Ax.reshape(-1, shape[-1])
+#    order = np.lexsort((Aj, Ai))
+#    Ai = Ai[order]
+#    Aj = Aj[order]
+#    Ax = Ax[:, order]
+#    unique_idxs, = np.where(np.append(True, (Ai[1:] != Ai[:-1]) | (Aj[1:] != Aj[:-1])))
+#    Ai = Ai[unique_idxs]
+#    Aj = Aj[unique_idxs]
+#    Ax = np.add.reduceat(Ax, unique_idxs, axis=1)
+#    return Ai, Aj, Ax.reshape(*shape[:-1], -1)
+
+
+def coalesce(
+    Ai: jax.Array,
+    Aj: jax.Array,
+    Ax: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """
+    Coalesce a sparse matrix by summing duplicate indices.
+
+    Args:
+        Ai: [n_nz; int32]: the row indices of the sparse matrix A
+        Aj: [n_nz; int32]: the column indices of the sparse matrix A
+        Ax: [... x n_nz; float64|complex128]: the values of the sparse matrix A
+
+    Returns:
+        coalesced Ai, Aj, Ax
+
+    """
+    with jax.ensure_compile_time_eval():
+        shape = Ax.shape
+
+        order = jnp.lexsort((Aj, Ai))
+        Ai = Ai[order]
+        Aj = Aj[order]
+
+        # Compute unique indices
+        unique_mask = jnp.concatenate(
+            [jnp.array([True]), (Ai[1:] != Ai[:-1]) | (Aj[1:] != Aj[:-1])],
+        )
+        unique_idxs = jnp.where(unique_mask)[0]
+
+        # Assign each entry to a unique group
+        groups = jnp.cumsum(unique_mask) - 1
+
+        # Sum Ax values over groups
+        Ai = Ai[unique_idxs]
+        Aj = Aj[unique_idxs]
+
+    Ax = Ax.reshape(-1, shape[-1])
+    Ax = Ax[:, order]
+    Ax = jax.vmap(jax.ops.segment_sum, [0, None], 0)(Ax, groups)
+
+    return Ai, Aj, Ax.reshape(*shape[:-1], -1)
 
 
 # Primitives ==========================================================================

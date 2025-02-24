@@ -10,7 +10,7 @@ from jax import lax
 from jaxlib.xla_extension import XlaRuntimeError
 
 import klujax
-from klujax import COMPLEX_DTYPES
+from klujax import COMPLEX_DTYPES, coalesce
 
 OPS_DENSE = {  # sparse to dense
     klujax.dot: lax.dot,
@@ -84,7 +84,7 @@ def test_2d_vmap(dtype, op_sparse):
 @parametrize_ops
 def test_3d(dtype, op_sparse):
     op_dense = jax.vmap(OPS_DENSE[op_sparse], (0, 0), 0)
-    Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 8, (n_col := 5), 2, dtype=dtype)
+    Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 15, (n_col := 5), 1, dtype=dtype)
     x_sp = op_sparse(Ai, Aj, Ax, b)
     A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
     x = op_dense(A, b)
@@ -97,7 +97,7 @@ def test_3d(dtype, op_sparse):
 @parametrize_ops
 def test_3d_jacfwd(dtype, op_sparse):
     op_dense = jax.vmap(OPS_DENSE[op_sparse], (0, 0), 0)
-    Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 8, (n_col := 5), 2, dtype=dtype)
+    Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 15, (n_col := 5), 2, dtype=dtype)
     holomorphic = dtype in COMPLEX_DTYPES
 
     # jacobian on b
@@ -119,7 +119,7 @@ def test_3d_jacfwd(dtype, op_sparse):
 @parametrize_ops
 def test_3d_jacrev(dtype, op_sparse):
     op_dense = jax.vmap(OPS_DENSE[op_sparse], (0, 0), 0)
-    Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 8, (n_col := 5), 2, dtype=dtype)
+    Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 15, (n_col := 5), 2, dtype=dtype)
     holomorphic = dtype in COMPLEX_DTYPES
 
     # jacobian on b
@@ -199,6 +199,7 @@ def _get_rand_arrs_1d(n_nz, n_col, *, dtype, seed=33):
     Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
     Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
     Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
+    Ai, Aj, Ax = coalesce(Ai, Aj, Ax)
     b = jax.random.normal(bkey, (n_col,), dtype=dtype)
     return Ai, Aj, Ax, b
 
@@ -215,6 +216,7 @@ def _get_rand_arrs_2d(n_lhs, n_nz, n_col, *, dtype, seed=33):
         ),
         dtype=dtype,
     )
+    Ai, Aj, Ax = coalesce(Ai, Aj, Ax)
     b = jax.random.normal(bkey, (n_lhs, n_col), dtype=dtype)
     return Ai, Aj, Ax, b
 
@@ -231,6 +233,7 @@ def _get_rand_arrs_3d(n_lhs, n_nz, n_col, n_rhs, *, dtype, seed=33):
         ),
         dtype=dtype,
     )
+    Ai, Aj, Ax = coalesce(Ai, Aj, Ax)
     b = jax.random.normal(bkey, (n_lhs, n_col, n_rhs), dtype=dtype)
     return Ai, Aj, Ax, b
 
