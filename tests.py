@@ -165,14 +165,17 @@ def test_4d(dtype, op_sparse):
         op_sparse(Ai, Aj, Ax[None], b[None])
 
 
-@pytest.mark.skip
 @log_test_name
 @parametrize_dtypes
 @parametrize_ops
 def test_4d_vmap(dtype, op_sparse):
     Ai, Aj, Ax, b = _get_rand_arrs_3d(3, 8, 5, 2, dtype=dtype)
-    jax.vmap(op_sparse, (None, None, None, 1), 0)(Ai, Aj, Ax, b[:, None])
-    # TODO: compare with dense result
+    bb = np.stack([b, (b2 := np.random.RandomState(seed=42).rand(*b.shape))], axis=1)
+    r = jax.vmap(op_sparse, (None, None, None, 1), 0)(Ai, Aj, Ax, bb)
+    r1 = op_sparse(Ai, Aj, Ax, b)
+    r2 = op_sparse(Ai, Aj, Ax, b2)
+    _log_and_test_equality(r[0], r1)
+    _log_and_test_equality(r[1], r2)
 
 
 @pytest.mark.skip
