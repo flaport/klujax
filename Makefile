@@ -16,19 +16,19 @@ test:
 .PHONY: suitesparse
 suitesparse:
 	rm -rf suitesparse
-	git clone --depth 1 --branch v7.4.0 https://github.com/DrTimothyAldenDavis/SuiteSparse suitesparse || true
+	git clone --depth 1 --branch v7.5.0 https://github.com/DrTimothyAldenDavis/SuiteSparse suitesparse || true
 	cd suitesparse && rm -rf .git
 
 .PHONY: xla
 xla:
 	rm -rf xla
-	git clone --depth 1 --branch main https://github.com/openxla/xla xla
+	git clone --depth 1 https://github.com/openxla/xla xla
 	cd xla && rm -rf .git
 
 .PHONY: pybind11
 pybind11:
 	rm -rf pybind11
-	git clone --depth 1 --branch stable https://github.com/pybind/pybind11 pybind11
+	git clone --depth 1 --branch v2.13.6 https://github.com/pybind/pybind11 pybind11
 	cd pybind11 && rm -rf .git
 
 clean:
