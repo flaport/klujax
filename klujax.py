@@ -42,8 +42,7 @@ COMPLEX_DTYPES = (
 
 @jax.jit
 def solve(Ai: Array, Aj: Array, Ax: Array, b: Array) -> Array:
-    """
-    Solve for x in the sparse linear system Ax=b.
+    """Solve for x in the sparse linear system Ax=b.
 
     Args:
         Ai: [n_nz; int32]: the row indices of the sparse matrix A
@@ -75,8 +74,7 @@ def solve(Ai: Array, Aj: Array, Ax: Array, b: Array) -> Array:
 
 @jax.jit
 def dot(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
-    """
-    Multiply a sparse matrix with a vector: Ax=b.
+    """Multiply a sparse matrix with a vector: Ax=b.
 
     Args:
         Ai: [n_nz; int32]: the row indices of the sparse matrix A
@@ -107,39 +105,12 @@ def dot(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
     return result
 
 
-# @jax.jit
-# def coalesce(Ai: Array, Aj: Array, Ax: Array) -> tuple[Array, Array, Array]:
-#    """ Coalesce a sparse matrix by summing duplicate indices.
-#
-#    Args:
-#        Ai: [n_nz; int32]: the row indices of the sparse matrix A
-#        Aj: [n_nz; int32]: the column indices of the sparse matrix A
-#        Ax: [... x n_nz; float64|complex128]: the values of the sparse matrix A
-#
-#    Returns:
-#        coalesced Ai, Aj, Ax
-#    """
-#    # adapted from scipy.sparse.coo_matrix._sum_duplicates
-#    shape = Ax.shape
-#    Ax = Ax.reshape(-1, shape[-1])
-#    order = np.lexsort((Aj, Ai))
-#    Ai = Ai[order]
-#    Aj = Aj[order]
-#    Ax = Ax[:, order]
-#    unique_idxs, = np.where(np.append(True, (Ai[1:] != Ai[:-1]) | (Aj[1:] != Aj[:-1])))
-#    Ai = Ai[unique_idxs]
-#    Aj = Aj[unique_idxs]
-#    Ax = np.add.reduceat(Ax, unique_idxs, axis=1)
-#    return Ai, Aj, Ax.reshape(*shape[:-1], -1)
-
-
 def coalesce(
     Ai: jax.Array,
     Aj: jax.Array,
     Ax: jax.Array,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
-    """
-    Coalesce a sparse matrix by summing duplicate indices.
+    """Coalesce a sparse matrix by summing duplicate indices.
 
     Args:
         Ai: [n_nz; int32]: the row indices of the sparse matrix A

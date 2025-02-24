@@ -50,7 +50,7 @@ target-version = "py311"
 docstring-code-format = true
 
 [tool.ruff.lint]  # see https://docs.astral.sh/ruff/rules
-ignore = ["N803", "N806", "TD002", "TD003", "PLR0913", "D203", "D212", "FIX", "ERA", "PLR2004"]
+ignore = ["N803", "D213", "N806", "TD002", "D211", "TD003", "PLR0913", "FIX", "ERA", "PLR2004"]
 select = ["ALL"]
 
 [tool.ruff.lint.per-file-ignores]
