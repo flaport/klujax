@@ -16,7 +16,7 @@ test:
 .PHONY: suitesparse
 suitesparse:
 	rm -rf suitesparse
-	git clone --depth 1 --branch v7.2.0 https://github.com/DrTimothyAldenDavis/SuiteSparse suitesparse || true
+	git clone --depth 1 --branch v7.4.0 https://github.com/DrTimothyAldenDavis/SuiteSparse suitesparse || true
 	cd suitesparse && rm -rf .git
 
 .PHONY: xla
