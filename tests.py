@@ -91,7 +91,6 @@ def test_3d(dtype, op_sparse):
     _log_and_test_equality(x, x_sp)
 
 
-@pytest.mark.skip
 @log_test_name
 @parametrize_dtypes
 @parametrize_ops
@@ -113,7 +112,6 @@ def test_3d_jacfwd(dtype, op_sparse):
     _log_and_test_equality(jac_sp, jac)
 
 
-@pytest.mark.skip
 @log_test_name
 @parametrize_dtypes
 @parametrize_ops

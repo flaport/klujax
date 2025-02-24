@@ -296,6 +296,9 @@ ffi::Error solve_f64(
     }
 
     // copy _x_temp into _x and transpose the last two dimensions since JAX expects row-major layout
+    // NOTE: it feels a bit weird to have to do all this transposing here. This might actually be
+    // pretty inefficient. Ideally I'd like to get rid of this transpose. Maybe just represent b/x
+    // in python as n_lhs x n_rhs x n_col in stead of n_lhs x n_col x n_rhs?
     for (int m = 0; m < n_lhs; m++) {
         for (int n = 0; n < n_col; n++) {
             for (int p = 0; p < n_rhs; p++) {

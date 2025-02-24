@@ -427,7 +427,7 @@ def solve_f64_transpose(
         raise ValueError(msg)
 
     if ad.is_undefined_primal(b):
-        b_bar = solve_f64.bind(Aj, Ai, Ax, ct)  # Swap Ai, Aj to apply A^T
+        b_bar = solve_f64.bind(Aj, Ai, Ax, ct)
         return Ai, Aj, Ax, b_bar
 
     if ad.is_undefined_primal(Ax):
