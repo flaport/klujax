@@ -22,8 +22,8 @@ suitesparse:
 .PHONY: xla
 xla:
 	rm -rf xla
-	git clone --depth 1 https://github.com/openxla/xla xla
-	cd xla && rm -rf .git
+	git clone https://github.com/openxla/xla xla
+	cd xla && git checkout 05f004e8368c955b872126b1c978c60e33bbc5c8 && rm -rf .git
 
 .PHONY: pybind11
 pybind11:
