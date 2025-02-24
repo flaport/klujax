@@ -26,7 +26,8 @@ from jaxtyping import Array
 DEBUG = os.environ.get("KLUJAX_DEBUG", False)
 jax.config.update(name="jax_enable_x64", val=True)
 jax.config.update(name="jax_platform_name", val="cpu")
-log = lambda s: None if not DEBUG else print(s, file=sys.stderr)  # noqa: E731,T201
+debug = lambda s: None if not DEBUG else print(s, file=sys.stderr)  # noqa: E731,T201
+debug("KLUJAX DEBUG MODE.")
 
 # Constants ===========================================================================
 
@@ -54,22 +55,26 @@ def solve(Ai: Array, Aj: Array, Ax: Array, b: Array) -> Array:
         x: the result (x≈A^-1b)
 
     """
+    debug("solve")
+    Ai, Aj, Ax, b, shape = validate_args(Ai, Aj, Ax, b, x_name="b")
     if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
-        result = solve_c128.bind(
+        debug("solve-complex128")
+        x = solve_c128.bind(
             Ai.astype(jnp.int32),
             Aj.astype(jnp.int32),
             Ax.astype(jnp.complex128),
             b.astype(jnp.complex128),
         )
     else:
-        result = solve_f64.bind(
+        debug("solve-float64")
+        x = solve_f64.bind(
             Ai.astype(jnp.int32),
             Aj.astype(jnp.int32),
             Ax.astype(jnp.float64),
             b.astype(jnp.float64),
         )
 
-    return result
+    return x.reshape(*shape)
 
 
 @jax.jit
@@ -86,23 +91,25 @@ def dot(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
         b: the result (b=A@x)
 
     """
+    debug("dot")
+    Ai, Aj, Ax, x, shape = validate_args(Ai, Aj, Ax, x, x_name="x")
     if any(x.dtype in COMPLEX_DTYPES for x in (Ax, x)):
-        log("COMPLEX DOT")
-        result = dot_c128.bind(
+        debug("dot-complex128")
+        b = dot_c128.bind(
             Ai.astype(jnp.int32),
             Aj.astype(jnp.int32),
             Ax.astype(jnp.complex128),
             x.astype(jnp.complex128),
         )
     else:
-        log("FLOAT DOT")
-        result = dot_f64.bind(
+        debug("dot-float64")
+        b = dot_f64.bind(
             Ai.astype(jnp.int32),
             Aj.astype(jnp.int32),
             Ax.astype(jnp.float64),
             x.astype(jnp.float64),
         )
-    return result
+    return b.reshape(*shape)
 
 
 def coalesce(
@@ -523,3 +530,110 @@ def solve_transpose(
 
     msg = "No undefined primals in transpose."
     raise ValueError(msg)
+
+
+# Validators ==========================================================================
+
+
+def validate_args(  # noqa: C901,PLR0912
+    Ai: Array, Aj: Array, Ax: Array, x: Array, x_name: str = "x"
+) -> tuple[Array, Array, Array, Array, tuple[int, ...]]:
+    # cases:
+    # - (n_lhs, n_nz) x (n_lhs, n_col, n_rhs)
+    # - (n_lhs, n_nz) x (n_lhs, n_col) --> (n_lhs, n_nz) x (n_lhs, n_col, 1)
+    # - (n_nz,) x (n_lhs, n_col, n_rhs) --> (n_lhs, n_nz) x (n_lhs, n_col, n_rhs)
+    # - (n_nz,) x (n_col, n_rhs) --> (1, n_nz) x (1, n_col, n_rhs)
+    # - (n_nz,) x (n_col,) --> (1, n_nz) x (1, n_col, 1)
+    if Ai.ndim != 1:
+        msg = f"Ai should be 1D with shape (n_nz). Got: {Ai.shape=}."
+        raise ValueError(msg)
+    if Aj.ndim != 1:
+        msg = f"Aj should be 1D with shape (n_nz,). Got: {Aj.shape=}."
+        raise ValueError(msg)
+    if Ax.ndim == 0 or Ax.ndim > 2:
+        msg = (
+            "Ax should be 1D with shape (n_nz,) "
+            "or 2D with shape (n_lhs, n_nz). "
+            f"Got: {Ax.shape=}."
+        )
+        raise ValueError(msg)
+    if x.ndim == 0 or x.ndim > 3:
+        msg = (
+            f"{x_name} should be 1D with shape (n_col,) "
+            "or 2D with shape (n_col, n_rhs) "
+            "or 3D with shape (n_lhs, n_col, n_rhs). "
+            f"Got: {x_name}.shape={x.shape}."
+        )
+        raise ValueError(msg)
+
+    shape = x.shape
+
+    if Ax.ndim == 1 and x.ndim == 1:  # expand Ax and b dims
+        debug(f"assuming (n_nz:={Ax.shape[0]},) x (n_col:={x.shape[0]},)")
+        Ax = Ax[None, :]
+        x = x[None, :, None]
+    elif Ax.ndim == 1 and x.ndim == 2:  # expand Ax and b dims
+        debug(
+            f"assuming (n_nz:={Ax.shape[0]},) x "
+            f"(n_col:={x.shape[0]}, n_rhs:={x.shape[1]})"
+        )
+        Ax = Ax[None, :]
+        x = x[None, :, :]
+    elif Ax.ndim == 1 and x.ndim == 3:  # expand A dim (broadcast will happen in base)
+        debug(
+            f"assuming (n_nz:={Ax.shape[0]},) x "
+            f"(n_lhs:={x.shape[0]}, n_col:={x.shape[1]}, n_rhs:={x.shape[2]})"
+        )
+        Ax = Ax[None, :]
+    elif Ax.ndim == 2 and x.ndim == 1:  # expand dims to base case
+        debug(
+            f"assuming (n_lhs:={Ax.shape[0]}, n_nz:={Ax.shape[1]}) x "
+            f"(n_col:={x.shape[1]},)"
+        )
+        x = x[None, :, None]
+        shape = (Ax.shape[0], shape[0])  # we need to expand the shape here.
+    elif Ax.ndim == 2 and x.ndim == 2:  # expand dims to base case
+        debug(
+            f"assuming (n_lhs:={Ax.shape[0]}, n_nz:={Ax.shape[1]}) x "
+            f"(n_lhs:={x.shape[0]}, n_col:={x.shape[1]})"
+        )
+        if Ax.shape[0] != x.shape[0] and Ax.shape[0] != 1 and x.shape[0] != 1:
+            msg = (
+                f"Ax (2D) and {x_name} (2D) should have their first shape "
+                f"index `n_lhs` match. Got: {Ax.shape=}; {x_name}.shape={x.shape}. "
+                f"assuming (n_lhs:={Ax.shape[0]}, n_nz:={Ax.shape[1]}) x "
+                f"(n_lhs:={x.shape[0]}, n_col:={x.shape[1]})"
+            )
+            raise ValueError(msg)
+        x = x[:, :, None]
+        if x.shape[0] == 1 and Ax.shape[0] > 0:
+            shape = (Ax.shape[0], *shape[1:])
+
+    if Ax.ndim != 2 or x.ndim != 3:
+        msg = (
+            f"Invalid shapes for Ax and {x_name}. "
+            f"Got: {Ax.shape=}; {x_name}.shape={x.shape}. "
+            f"Expected: Ax.shape=([n_lhs],n_nz); "
+            f"{x_name}.shape=([n_lhs],n_col,[n_rhs])."
+        )
+        raise ValueError(msg)
+
+    # base case
+    debug(
+        f"assuming (n_lhs:={Ax.shape[0]}, n_nz:={Ax.shape[1]}) x "
+        f"(n_lhs:={x.shape[0]}, n_col:={x.shape[1]}, n_rhs:={x.shape[2]})"
+    )
+    if Ax.shape[0] != x.shape[0] and Ax.shape[0] != 1 and x.shape[0] != 1:
+        msg = (
+            f"Ax (2D) and {x_name} (3D) should have their first shape "
+            f"index `n_lhs` match. Got: {Ax.shape=}; {x_name}.shape={x.shape}."
+            f"assuming (n_lhs:={Ax.shape[0]}, n_nz:={Ax.shape[1]}) x "
+            f"(n_lhs:={x.shape[0]}, n_col:={x.shape[1]}, n_rhs:={x.shape[2]})"
+        )
+        raise ValueError(msg)
+    n_lhs = max(Ax.shape[0], x.shape[0])  # handle broadcastable 1-index
+    Ax = jnp.broadcast_to(Ax, (n_lhs, Ax.shape[1]))
+    x = jnp.broadcast_to(x, (n_lhs, x.shape[1], x.shape[2]))
+    if len(shape) == 3 and shape[0] != x.shape[0]:
+        shape = (Ax.shape[0], shape[1], shape[2])
+    return Ai, Aj, Ax, x, shape
