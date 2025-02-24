@@ -397,7 +397,6 @@ name = "klujax"
 version = "0.3.1"
 source = { editable = "." }
 dependencies = [
-    { name = "ipykernel" },
     { name = "jax" },
     { name = "jaxlib" },
     { name = "jaxtyping" },
@@ -407,6 +406,7 @@ dependencies = [
 [package.optional-dependencies]
 dev = [
     { name = "build" },
+    { name = "ipykernel" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "ruff" },
@@ -417,7 +417,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.2.2" },
-    { name = "ipykernel", specifier = ">=6.29.5" },
+    { name = "ipykernel", marker = "extra == 'dev'", specifier = ">=6.29.5" },
     { name = "jax", specifier = ">=0.5.0" },
     { name = "jaxlib", specifier = ">=0.5.0" },
     { name = "jaxtyping", specifier = ">=0.2.38" },

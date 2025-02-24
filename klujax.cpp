@@ -325,26 +325,25 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(  // b = A x
         .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Ai
         .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Aj
         .Arg<ffi::Buffer<ffi::DataType::F64>>()  // Ax
-        .Arg<ffi::Buffer<ffi::DataType::F64>>()  // x
-        .Ret<ffi::Buffer<ffi::DataType::F64>>()  // b
+        .Arg<ffi::Buffer<ffi::DataType::F64>>()  // b
+        .Ret<ffi::Buffer<ffi::DataType::F64>>()  // x
 );
 
 ffi::Error solve_c128(
-    ffi::Buffer<ffi::DataType::S32> Ai,
-    ffi::Buffer<ffi::DataType::S32> Aj,
-    ffi::Buffer<ffi::DataType::C128> Ax,
-    ffi::Buffer<ffi::DataType::C128> b,
+    const ffi::Buffer<ffi::DataType::S32> Ai,
+    const ffi::Buffer<ffi::DataType::S32> Aj,
+    const ffi::Buffer<ffi::DataType::C128> Ax,
+    const ffi::Buffer<ffi::DataType::C128> b,
     ffi::Result<ffi::Buffer<ffi::DataType::C128>> x) {
-    auto ds_b = b.dimensions();
+    auto ds_x = b.dimensions();
     auto ds_Ax = Ax.dimensions();
-    ffi::Error err = validate_dot_f64_args(Ai, Aj, ds_Ax, ds_b);
+    ffi::Error err = validate_dot_f64_args(Ai, Aj, ds_Ax, ds_x);
     if (err.failure()) {
         return err;
     }
-
-    int n_lhs = (int)ds_b[0];
-    int n_col = (int)ds_b[1];
-    int n_rhs = (int)ds_b[2];
+    int n_lhs = (int)ds_x[0];
+    int n_col = (int)ds_x[1];
+    int n_rhs = (int)ds_x[2];
     int n_nz = (int)ds_Ax[1];
     const int *_Ai = Ai.typed_data();
     const int *_Aj = Aj.typed_data();
@@ -353,16 +352,15 @@ ffi::Error solve_c128(
     double *_x = (double *)x->typed_data();
 
     // get COO -> CSC transformation information
-    int *_Bk = new int[n_nz]();  // Ax -> Bx transformation indices
-    int *_Bi = new int[n_nz]();
-    int *_Bp = new int[n_col + 1]();
+    int *_Bk = new int[n_nz]();       // Ax -> Bx transformation indices
+    int *_Bi = new int[n_nz]();       // CSC row indices
+    int *_Bp = new int[n_col + 1]();  // CSC column pointers
     double *_Bx = new double[2 * n_nz]();
-
     coo_to_csc_analyze(n_col, n_nz, _Ai, _Aj, _Bi, _Bp, _Bk);
 
     // copy _b into _x_temp and transpose the last two dimensions since KLU expects col-major layout
     // _b itself won't be used anymore. KLU works on _x_temp in-place.
-    double *_x_temp = new double[n_lhs * n_col * n_rhs]();
+    double *_x_temp = new double[2 * n_lhs * n_col * n_rhs]();
     for (int m = 0; m < n_lhs; m++) {
         for (int n = 0; n < n_col; n++) {
             for (int p = 0; p < n_rhs; p++) {
@@ -409,15 +407,6 @@ ffi::Error solve_c128(
         }
     }
 
-    // clean up
-    klu_free_symbolic(&Symbolic, &Common);
-    klu_free_numeric(&Numeric, &Common);
-    delete[] _Bk;
-    delete[] _Bi;
-    delete[] _Bp;
-    delete[] _Bx;
-    delete[] _x_temp;
-
     return ffi::Error::Success();
 }
 
@@ -427,8 +416,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(  // b = A x
         .Arg<ffi::Buffer<ffi::DataType::S32>>()   // Ai
         .Arg<ffi::Buffer<ffi::DataType::S32>>()   // Aj
         .Arg<ffi::Buffer<ffi::DataType::C128>>()  // Ax
-        .Arg<ffi::Buffer<ffi::DataType::C128>>()  // x
-        .Ret<ffi::Buffer<ffi::DataType::C128>>()  // b
+        .Arg<ffi::Buffer<ffi::DataType::C128>>()  // b
+        .Ret<ffi::Buffer<ffi::DataType::C128>>()  // x
 );
 
 // Python wrappers

@@ -3,7 +3,7 @@ dist:
 
 .PHONY: build
 dev:
-	uv venv --python 3.13
+	uv venv --python 3.12
 	uv sync --all-extras
 	python setup.py build_ext --inplace
 
@@ -32,6 +32,7 @@ pybind11:
 	cd pybind11 && rm -rf .git
 
 clean:
+	rm -rf .venv
 	find . -name "dist" | xargs rm -rf
 	find . -name "build" | xargs rm -rf
 	find . -name "builds" | xargs rm -rf
