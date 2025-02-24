@@ -1,3 +1,5 @@
+"""Custom script to run tests in CI."""
+
 import os
 import platform
 import sys
@@ -13,6 +15,6 @@ if sys.platform == "darwin":
     architecture = platform.machine()
     print(f"{architecture=}")
     if architecture != "arm64":
-        exit(print("skipping tests as we only run them on arm64."))
+        sys.exit(print("skipping tests as we only run them on arm64."))
 
-exit(call(["pytest", "-s", TESTS_PATH]))
+sys.exit(call(["pytest", "-s", TESTS_PATH]))

@@ -15,10 +15,10 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Mathematics"
 ]
 dependencies = [
-  "jax>=0.4.35",
-  "jaxlib>=0.4.35",
-  "numpy>=2",
-  "jaxtyping"
+  "jax>=0.5.1",
+  "jaxlib>=0.5.1",
+  "jaxtyping>=0.2.38",
+  "numpy>=2"
 ]
 description = "a KLU solver for JAX"
 license = {file = "LICENSE"}
@@ -29,27 +29,34 @@ version = "0.3.1"
 
 [project.optional-dependencies]
 dev = [
-  "pre-commit",
-  "tbump",
-  "ruff",
-  "uv"
+  "build>=1.2.2",
+  "ipykernel>=6.29.5",
+  "pre-commit>=4.1.0",
+  "pytest>=8.3.4",
+  "ruff>=0.9.7",
+  "setuptools>=75.8.0",
+  "tbump>=6.11.0"
 ]
 
-[tool.black]
-include = '\.pyi?$'
-line-length = 88
-target-version = ['py310']
+[tool.pytest.ini_options]
+addopts = '--tb=short'
+testpaths = ["tests.py"]
 
-[tool.codespell]
-ignore-words-list = "COO"
-skip = "*.ipynb"
+[tool.ruff]
+fix = true
+target-version = "py311"
 
-[tool.pyright]
-reportPrivateImportUsage = false
-reportUnusedVariable = false
+[tool.ruff.format]
+docstring-code-format = true
 
-[tool.ruff.pydocstyle]
-convention = "google"
+[tool.ruff.lint]  # see https://docs.astral.sh/ruff/rules
+ignore = ["N803", "D213", "N806", "TD002", "D211", "TD003", "PLR0913", "FIX", "ERA", "PLR2004", "COM812", "D203"]
+select = ["ALL"]
+
+[tool.ruff.lint.per-file-ignores]
+".github/run_tests.py" = ["INP", "PTH", "T201", "S603", "S607"]
+"setup.py" = ["PTH", "ANN", "D101", "D102"]
+"tests.py" = ["D", "INP001", "ANN", "T201", "E501", "N806"]
 
 [tool.setuptools.package-data]
 "*" = [

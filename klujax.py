@@ -1,35 +1,44 @@
-""" klujax: a KLU solver for JAX """
+"""klujax: a KLU solver for JAX."""
 
 # Metadata ============================================================================
 
 __version__ = "0.3.1"
 __author__ = "Floris Laporte"
-__all__ = ["solve", "coo_mul_vec"]
+__all__ = ["coalesce", "dot", "solve"]
 
 # Imports =============================================================================
 
+import os
 import sys
-from functools import partial
 
 import jax
-import jax.extend
+import jax.extend.core
 import jax.numpy as jnp
+import klujax_cpp
 import numpy as np
-from jax import core, lax
+from jax import lax
 from jax.core import ShapedArray
 from jax.interpreters import ad, batching, mlir
 from jaxtyping import Array
 
-import klujax_cpp
-
 # Config ==============================================================================
 
-DEBUG = False
-jax.config.update("jax_enable_x64", True)
-jax.config.update("jax_platform_name", "cpu")
-_log = lambda s: None if not DEBUG else print(s, file=sys.stderr)  # noqa: E731
+DEBUG = os.environ.get("KLUJAX_DEBUG", False)
+jax.config.update(name="jax_enable_x64", val=True)
+jax.config.update(name="jax_platform_name", val="cpu")
+debug = lambda s: None if not DEBUG else print(s, file=sys.stderr)  # noqa: E731,T201
+debug("KLUJAX DEBUG MODE.")
 
-# The main functions ==================================================================
+# Constants ===========================================================================
+
+COMPLEX_DTYPES = (
+    np.complex64,
+    np.complex128,
+    jnp.complex64,
+    jnp.complex128,
+)
+
+# Main Functions ======================================================================
 
 
 @jax.jit
@@ -44,434 +53,587 @@ def solve(Ai: Array, Aj: Array, Ax: Array, b: Array) -> Array:
 
     Returns:
         x: the result (x≈A^-1b)
+
     """
+    debug("solve")
+    Ai, Aj, Ax, b, shape = validate_args(Ai, Aj, Ax, b, x_name="b")
     if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
-        result = solve_c128.bind(
+        debug("solve-complex128")
+        x = solve_c128.bind(
             Ai.astype(jnp.int32),
             Aj.astype(jnp.int32),
             Ax.astype(jnp.complex128),
             b.astype(jnp.complex128),
         )
     else:
-        result = solve_f64.bind(
+        debug("solve-float64")
+        x = solve_f64.bind(
             Ai.astype(jnp.int32),
             Aj.astype(jnp.int32),
             Ax.astype(jnp.float64),
             b.astype(jnp.float64),
         )
 
-    return result  # type: ignore
+    return x.reshape(*shape)
 
 
 @jax.jit
-def coo_mul_vec(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
-    """Multiply a sparse matrix with a vector: Ax=b
+def dot(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
+    """Multiply a sparse matrix with a vector: Ax=b.
 
     Args:
         Ai: [n_nz; int32]: the row indices of the sparse matrix A
         Aj: [n_nz; int32]: the column indices of the sparse matrix A
         Ax: [n_lhs? x n_nz; float64|complex128]: the values of the sparse matrix A
-        x:  [n_lhs? x n_col x n_rhs?; float64|complex128]: the vector that's being multiplied by A
+        x:  [n_lhs? x n_col x n_rhs?; float64|complex128]: the vector multiplied by A
 
     Returns:
-        b: the result of the multiplication (b=Ax)
+        b: the result (b=A@x)
+
     """
+    debug("dot")
+    Ai, Aj, Ax, x, shape = validate_args(Ai, Aj, Ax, x, x_name="x")
     if any(x.dtype in COMPLEX_DTYPES for x in (Ax, x)):
-        result = coo_mul_vec_c128.bind(
+        debug("dot-complex128")
+        b = dot_c128.bind(
             Ai.astype(jnp.int32),
             Aj.astype(jnp.int32),
             Ax.astype(jnp.complex128),
             x.astype(jnp.complex128),
         )
     else:
-        result = coo_mul_vec_f64.bind(
+        debug("dot-float64")
+        b = dot_f64.bind(
             Ai.astype(jnp.int32),
             Aj.astype(jnp.int32),
             Ax.astype(jnp.float64),
             x.astype(jnp.float64),
         )
-    return result  # type: ignore
+    return b.reshape(*shape)
 
 
-# Constants ===========================================================================
+def coalesce(
+    Ai: jax.Array,
+    Aj: jax.Array,
+    Ax: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Coalesce a sparse matrix by summing duplicate indices.
 
-COMPLEX_DTYPES = (
-    np.complex64,
-    np.complex128,
-    # np.complex256,
-    jnp.complex64,
-    jnp.complex128,
-)
+    Args:
+        Ai: [n_nz; int32]: the row indices of the sparse matrix A
+        Aj: [n_nz; int32]: the column indices of the sparse matrix A
+        Ax: [... x n_nz; float64|complex128]: the values of the sparse matrix A
+
+    Returns:
+        coalesced Ai, Aj, Ax
+
+    """
+    with jax.ensure_compile_time_eval():
+        shape = Ax.shape
+
+        order = jnp.lexsort((Aj, Ai))
+        Ai = Ai[order]
+        Aj = Aj[order]
+
+        # Compute unique indices
+        unique_mask = jnp.concatenate(
+            [jnp.array([True]), (Ai[1:] != Ai[:-1]) | (Aj[1:] != Aj[:-1])],
+        )
+        unique_idxs = jnp.where(unique_mask)[0]
+
+        # Assign each entry to a unique group
+        groups = jnp.cumsum(unique_mask) - 1
+
+        # Sum Ax values over groups
+        Ai = Ai[unique_idxs]
+        Aj = Aj[unique_idxs]
+
+    Ax = Ax.reshape(-1, shape[-1])
+    Ax = Ax[:, order]
+    Ax = jax.vmap(jax.ops.segment_sum, [0, None], 0)(Ax, groups)
+
+    return Ai, Aj, Ax.reshape(*shape[:-1], -1)
+
 
 # Primitives ==========================================================================
 
-solve_f64 = core.Primitive("solve_f64")
-solve_c128 = core.Primitive("solve_c128")
-coo_mul_vec_f64 = core.Primitive("coo_mul_vec_f64")
-coo_mul_vec_c128 = core.Primitive("coo_mul_vec_c128")
-
-# Register XLA extensions ==============================================================
-
-jax.extend.ffi.register_ffi_target(
-    "_solve_f64",
-    klujax_cpp.solve_f64(),
-    platform="cpu",
-)
-
-jax.extend.ffi.register_ffi_target(
-    "_coo_mul_vec_f64",
-    klujax_cpp.coo_mul_vec_f64(),
-    platform="cpu",
-)
-
-jax.extend.ffi.register_ffi_target(
-    "_solve_c128",
-    klujax_cpp.solve_c128(),
-    platform="cpu",
-)
-
-jax.extend.ffi.register_ffi_target(
-    "_coo_mul_vec_c128",
-    klujax_cpp.coo_mul_vec_c128(),
-    platform="cpu",
-)
-
-# Helper Decorators ===================================================================
-
-
-def ad_register(primitive):
-    def decorator(fun):
-        ad.primitive_jvps[primitive] = fun
-        return fun
-
-    return decorator
-
-
-def transpose_register(primitive):
-    def decorator(fun):
-        ad.primitive_transposes[primitive] = fun
-        return fun
-
-    return decorator
-
-
-def vmap_register(primitive, operation):
-    def decorator(fun):
-        batching.primitive_batchers[primitive] = partial(fun, operation)
-        return fun
-
-    return decorator
-
+dot_f64 = jax.extend.core.Primitive("dot_f64")
+dot_c128 = jax.extend.core.Primitive("dot_c128")
+solve_f64 = jax.extend.core.Primitive("solve_f64")
+solve_c128 = jax.extend.core.Primitive("solve_c128")
 
 # Implementations =====================================================================
 
 
-@solve_f64.def_impl
-def solve_f64_impl(Ai, Aj, Ax, b) -> jnp.ndarray:
-    Ai, Aj, Ax, b, shape = _prepare_arguments(Ai, Aj, Ax, b)
+@dot_f64.def_impl
+def dot_f64_impl(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
+    return general_impl("dot_f64", Ai, Aj, Ax, x)
 
-    _b = b.transpose(0, 2, 1)
-    call = jax.extend.ffi.ffi_call(
-        "_solve_f64",
-        jax.ShapeDtypeStruct(_b.shape, _b.dtype),
-        vmap_method="broadcast_all",
-    )
-    result = call(  # type: ignore
-        Ai,
-        Aj,
-        Ax,
-        _b,
-    )
-    return result.transpose(0, 2, 1).reshape(*shape)  # type: ignore
+
+@dot_c128.def_impl
+def dot_c128_impl(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
+    return general_impl("dot_c128", Ai, Aj, Ax, x)
+
+
+@solve_f64.def_impl
+def solve_f64_impl(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
+    return general_impl("solve_f64", Ai, Aj, Ax, x)
 
 
 @solve_c128.def_impl
-def solve_c128_impl(Ai, Aj, Ax, b) -> jnp.ndarray:
-    Ai, Aj, Ax, b, shape = _prepare_arguments(Ai, Aj, Ax, b)
+def solve_c128_impl(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
+    return general_impl("solve_c128", Ai, Aj, Ax, x)
 
-    _b = b.transpose(0, 2, 1)
-    call = jax.extend.ffi.ffi_call(
-        "_solve_c128",
-        jax.ShapeDtypeStruct(_b.shape, _b.dtype),
-        vmap_method="broadcast_all",
+
+def general_impl(name: str, Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
+    call = jax.ffi.ffi_call(
+        name,
+        jax.ShapeDtypeStruct(x.shape, x.dtype),
     )
-    result = call(  # type: ignore
-        Ai,
-        Aj,
-        Ax,
-        _b,
-    )
-    return result.transpose(0, 2, 1).reshape(*shape)  # type: ignore
-
-
-@coo_mul_vec_f64.def_impl
-def coo_mul_vec_f64_impl(Ai, Aj, Ax, x) -> jnp.ndarray:
-    Ai, Aj, Ax, x, shape = _prepare_arguments(Ai, Aj, Ax, x)
-    _x = x.transpose(0, 2, 1)
-    call = jax.extend.ffi.ffi_call(
-        "_coo_mul_vec_f64",
-        jax.ShapeDtypeStruct(_x.shape, _x.dtype),
-        vmap_method="broadcast_all",
-    )
-    result = call(  # type: ignore
-        Ai,
-        Aj,
-        Ax,
-        _x,
-    )
-    return result.transpose(0, 2, 1).reshape(*shape)  # type: ignore
-
-
-@coo_mul_vec_c128.def_impl
-def coo_mul_vec_c128_impl(Ai, Aj, Ax, x) -> jnp.ndarray:
-    Ai, Aj, Ax, x, shape = _prepare_arguments(Ai, Aj, Ax, x)
-    _x = x.transpose(0, 2, 1)
-    call = jax.extend.ffi.ffi_call(
-        "_coo_mul_vec_c128",
-        jax.ShapeDtypeStruct(_x.shape, _x.dtype),
-        vmap_method="broadcast_all",
-    )
-    result = call(  # type: ignore
-        Ai,
-        Aj,
-        Ax,
-        _x,
-    )
-    return result.transpose(0, 2, 1).reshape(*shape)  # type: ignore
-
-
-def _prepare_arguments(Ai, Aj, Ax, x):
-    Ai = jnp.asarray(Ai)
-    Aj = jnp.asarray(Aj)
-    Ax = jnp.asarray(Ax)
-    x = jnp.asarray(x)
-    shape = x.shape
-
-    _log(f"{Ai.dtype=}")
-    _log(f"{Aj.dtype=}")
-    _log(f"{Ai.max()=}")
-    _log(f"{Aj.max()=}")
-    _log(f"{Ax.dtype=}")
-    _log(f"{x.dtype=}")
-    _log(f"{Ax.shape=}")
-    _log(f"{x.shape=}")
-
-    prefer_x_rhs_over_lhs = (Ax.ndim < 2) or (Ax.shape[0] != x.shape[0])
-    _log(f"{prefer_x_rhs_over_lhs=}")
-
-    if Ax.ndim > 2:
-        raise ValueError(
-            f"Ax should be at most 2D with shape: (n_lhs, n_nz). Got: {Ax.shape}. "
-            "Note: jax.vmap is supported. Use it if needed."
-        )
-    else:
-        Ax = jnp.atleast_2d(Ax)
-
-    a_n_lhs, n_nz = Ax.shape
-    Ax = Ax.reshape(-1, n_nz)
-    _log(f"{Ax.shape=}")
-    _log(f"{n_nz=}")
-
-    if x.ndim == 0:
-        x = x[None, None, None]
-        x_n_lhs, n_col, n_rhs = x.shape
-        shape_includes_lhs = False
-    elif x.ndim == 1:
-        x = x[None, :, None]
-        x_n_lhs, n_col, n_rhs = x.shape
-        shape_includes_lhs = False
-    elif x.ndim == 2 and prefer_x_rhs_over_lhs:
-        x = x[None, :, :]
-        x_n_lhs, n_col, n_rhs = x.shape
-        shape_includes_lhs = False
-    elif x.ndim == 2 and not prefer_x_rhs_over_lhs:
-        x = x[:, :, None]
-        x_n_lhs, n_col, n_rhs = x.shape
-        shape_includes_lhs = True
-    elif x.ndim == 3:
-        x_n_lhs, n_col, n_rhs = x.shape
-        shape_includes_lhs = True
-    else:
-        raise ValueError(
-            f"x should be at most 3D with shape: (n_lhs, n_col, n_rhs). Got: {x.shape}. "
-            "Note: jax.vmap is supported. Use it if needed."
-        )
-    _log(f"{x.shape=}")
-    _log(f"{n_col=}")
-    _log(f"{n_rhs=}")
-
-    if a_n_lhs == x_n_lhs:
-        n_lhs = a_n_lhs
-    elif a_n_lhs > x_n_lhs:
-        if not x_n_lhs == 1:
-            raise ValueError(
-                f"Cannot broadcast n_lhs for x into n_lhs for Ax. "
-                f"Got: n_lhs[x]={x_n_lhs}; n_lhs[Ax]={a_n_lhs}."
-            )
-        n_lhs = a_n_lhs
-        if shape_includes_lhs:
-            shape = (n_lhs,) + shape[1:]
-        else:
-            shape = (n_lhs,) + shape
-    else:
-        if not a_n_lhs == 1:
-            raise ValueError(
-                f"Cannot broadcast n_lhs for Ax into n_lhs for x. "
-                f"Got: n_lhs[x]={x_n_lhs}; n_lhs[Ax]={a_n_lhs}."
-            )
-        n_lhs = x_n_lhs
-    _log(f"{n_lhs=}")
-
-    Ax = jnp.broadcast_to(Ax, (n_lhs, n_nz))
-    x = jnp.broadcast_to(x, (n_lhs, n_col, n_rhs))
-
-    _log(f"{Ax.shape=}")
-    _log(f"{x.shape=}")
-
-    # We retain the old shape of b so the result of the primitive can be
-    # reshaped to the expected shape.
-    return Ai, Aj, Ax, x, shape
+    if not callable(call):
+        msg = "jax.ffi.ffi_call did not return a callable."
+        raise RuntimeError(msg)  # noqa: TRY004
+    return call(Ai, Aj, Ax, x)
 
 
 # Lowerings ===========================================================================
 
-solve_f64_lowering = mlir.lower_fun(solve_f64_impl, multiple_results=False)
-mlir.register_lowering(solve_f64, solve_f64_lowering)
-
-solve_c128_lowering = mlir.lower_fun(solve_c128_impl, multiple_results=False)
-mlir.register_lowering(solve_c128, solve_c128_lowering)
-
-coo_mul_vec_f64_lowering = mlir.lower_fun(coo_mul_vec_f64_impl, multiple_results=False)
-mlir.register_lowering(coo_mul_vec_f64, coo_mul_vec_f64_lowering)
-
-coo_mul_vec_c128_lowering = mlir.lower_fun(
-    coo_mul_vec_c128_impl, multiple_results=False
+jax.ffi.register_ffi_target(
+    "dot_f64",
+    klujax_cpp.dot_f64(),
+    platform="cpu",
 )
-mlir.register_lowering(coo_mul_vec_c128, coo_mul_vec_c128_lowering)
 
-# Abstract Evaluations ================================================================
+dot_f64_low = mlir.lower_fun(dot_f64_impl, multiple_results=False)
+mlir.register_lowering(dot_f64, dot_f64_low)
+
+jax.ffi.register_ffi_target(
+    "dot_c128",
+    klujax_cpp.dot_c128(),
+    platform="cpu",
+)
+
+dot_c128_low = mlir.lower_fun(dot_c128_impl, multiple_results=False)
+mlir.register_lowering(dot_c128, dot_c128_low)
+
+jax.ffi.register_ffi_target(
+    "solve_f64",
+    klujax_cpp.solve_f64(),
+    platform="cpu",
+)
+
+solve_f64_low = mlir.lower_fun(solve_f64_impl, multiple_results=False)
+mlir.register_lowering(solve_f64, solve_f64_low)
+
+jax.ffi.register_ffi_target(
+    "solve_c128",
+    klujax_cpp.solve_c128(),
+    platform="cpu",
+)
+
+solve_c128_low = mlir.lower_fun(solve_c128_impl, multiple_results=False)
+mlir.register_lowering(solve_c128, solve_c128_low)
+
+# Abstract Evals ======================================================================
 
 
+@dot_f64.def_abstract_eval
+@dot_c128.def_abstract_eval
 @solve_f64.def_abstract_eval
 @solve_c128.def_abstract_eval
-@coo_mul_vec_f64.def_abstract_eval
-@coo_mul_vec_c128.def_abstract_eval
-def coo_vec_operation_abstract_eval(Ai, Aj, Ax, b):
+def general_abstract_eval(Ai: Array, Aj: Array, Ax: Array, b: Array) -> ShapedArray:  # noqa: ARG001
     return ShapedArray(b.shape, b.dtype)
 
 
-# Forward Gradients ===================================================================
+# Forward Differentiation =============================================================
 
 
-@ad_register(solve_f64)
-@ad_register(solve_c128)
-def solve_value_and_jvp(arg_values, arg_tangents):
+def dot_f64_value_and_jvp(
+    arg_values: tuple[Array, Array, Array, Array],
+    arg_tangents: tuple[Array, Array, Array, Array],
+) -> tuple[Array, Array]:
+    return dot_value_and_jvp(dot_f64, arg_values, arg_tangents)
+
+
+ad.primitive_jvps[dot_f64] = dot_f64_value_and_jvp
+
+
+def dot_c128_value_and_jvp(
+    arg_values: tuple[Array, Array, Array, Array],
+    arg_tangents: tuple[Array, Array, Array, Array],
+) -> tuple[Array, Array]:
+    return dot_value_and_jvp(dot_c128, arg_values, arg_tangents)
+
+
+ad.primitive_jvps[dot_c128] = dot_c128_value_and_jvp
+
+
+def solve_f64_value_and_jvp(
+    arg_values: tuple[Array, Array, Array, Array],
+    arg_tangents: tuple[Array, Array, Array, Array],
+) -> tuple[Array, Array]:
+    return solve_value_and_jvp(solve_f64, dot_f64, arg_values, arg_tangents)
+
+
+ad.primitive_jvps[solve_f64] = solve_f64_value_and_jvp
+
+
+def solve_c128_value_and_jvp(
+    arg_values: tuple[Array, Array, Array, Array],
+    arg_tangents: tuple[Array, Array, Array, Array],
+) -> tuple[Array, Array]:
+    return solve_value_and_jvp(solve_c128, dot_c128, arg_values, arg_tangents)
+
+
+ad.primitive_jvps[solve_c128] = solve_c128_value_and_jvp
+
+
+def solve_value_and_jvp(
+    prim_solve: jax.extend.core.Primitive,
+    prim_dot: jax.extend.core.Primitive,
+    arg_values: tuple[Array, Array, Array, Array],
+    arg_tangents: tuple[Array, Array, Array, Array],
+) -> tuple[Array, Array]:
     Ai, Aj, Ax, b = arg_values
     dAi, dAj, dAx, db = arg_tangents
     dAx = dAx if not isinstance(dAx, ad.Zero) else lax.zeros_like_array(Ax)
     dAi = dAi if not isinstance(dAi, ad.Zero) else lax.zeros_like_array(Ai)
     dAj = dAj if not isinstance(dAj, ad.Zero) else lax.zeros_like_array(Aj)
     db = db if not isinstance(db, ad.Zero) else lax.zeros_like_array(b)
-    x = solve(Ai, Aj, Ax, b)
-    dA_x = coo_mul_vec(Ai, Aj, dAx, x)
-    invA_dA_x = solve(Ai, Aj, Ax, dA_x)
-    invA_db = solve(Ai, Aj, Ax, db)
+    x = prim_solve.bind(Ai, Aj, Ax, b)
+    dA_x = prim_dot.bind(Ai, Aj, dAx, x)
+    invA_dA_x = prim_solve.bind(Ai, Aj, Ax, dA_x)
+    invA_db = prim_solve.bind(Ai, Aj, Ax, db)
     return x, -invA_dA_x + invA_db
 
 
-@ad_register(coo_mul_vec_f64)
-@ad_register(coo_mul_vec_c128)
-def coo_mul_vec_value_and_jvp(arg_values, arg_tangents):
+def dot_value_and_jvp(
+    prim: jax.extend.core.Primitive,
+    arg_values: tuple[Array, Array, Array, Array],
+    arg_tangents: tuple[Array, Array, Array, Array],
+) -> tuple[Array, Array]:
     Ai, Aj, Ax, b = arg_values
     dAi, dAj, dAx, db = arg_tangents
     dAx = dAx if not isinstance(dAx, ad.Zero) else lax.zeros_like_array(Ax)
     dAi = dAi if not isinstance(dAi, ad.Zero) else lax.zeros_like_array(Ai)
     dAj = dAj if not isinstance(dAj, ad.Zero) else lax.zeros_like_array(Aj)
     db = db if not isinstance(db, ad.Zero) else lax.zeros_like_array(b)
-    x = coo_mul_vec(Ai, Aj, Ax, b)
-    dA_b = coo_mul_vec(Ai, Aj, dAx, b)
-    A_db = coo_mul_vec(Ai, Aj, Ax, db)
+    x = prim.bind(Ai, Aj, Ax, b)
+    dA_b = prim.bind(Ai, Aj, dAx, b)
+    A_db = prim.bind(Ai, Aj, Ax, db)
     return x, dA_b + A_db
 
 
-# Backward Gradients through Transposition ============================================
+# Batching (vmap) =====================================================================
 
 
-@transpose_register(solve_f64)
-@transpose_register(solve_c128)
-def solve_transpose(ct, Ai, Aj, Ax, b):
-    assert not ad.is_undefined_primal(Ai)
-    assert not ad.is_undefined_primal(Aj)
-    assert not ad.is_undefined_primal(Ax)
-    assert not ad.is_undefined_primal(Ax)
-    assert ad.is_undefined_primal(b)
-    return None, None, None, solve(Aj, Ai, Ax.conj(), ct)  # = inv(A).H@ct [= ct@inv(A)]
+def dot_f64_vmap(
+    vector_arg_values: tuple[Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    return general_vmap(dot_f64, vector_arg_values, batch_axes)
 
 
-@transpose_register(coo_mul_vec_f64)
-@transpose_register(coo_mul_vec_c128)
-def coo_mul_vec_transpose(ct, Ai, Aj, Ax, b):
-    assert not ad.is_undefined_primal(Ai)
-    assert not ad.is_undefined_primal(Aj)
-    assert ad.is_undefined_primal(Ax) != ad.is_undefined_primal(b)  # xor
+batching.primitive_batchers[dot_f64] = dot_f64_vmap
+
+
+def dot_c128_vmap(
+    vector_arg_values: tuple[Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    return general_vmap(dot_c128, vector_arg_values, batch_axes)
+
+
+batching.primitive_batchers[dot_c128] = dot_c128_vmap
+
+
+def solve_f64_vmap(
+    vector_arg_values: tuple[Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    return general_vmap(solve_f64, vector_arg_values, batch_axes)
+
+
+batching.primitive_batchers[solve_f64] = solve_f64_vmap
+
+
+def solve_c128_vmap(
+    vector_arg_values: tuple[Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    return general_vmap(solve_c128, vector_arg_values, batch_axes)
+
+
+batching.primitive_batchers[solve_c128] = solve_c128_vmap
+
+
+def general_vmap(
+    prim: jax.extend.core.Primitive,
+    vector_arg_values: tuple[Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    Ai, Aj, Ax, x = vector_arg_values
+    aAi, aAj, aAx, ax = batch_axes
+
+    if aAi is not None:
+        msg = "Ai cannot be vectorized."
+        raise ValueError(msg)
+
+    if aAj is not None:
+        msg = "Aj cannot be vectorized."
+        raise ValueError(msg)
+
+    if aAx is not None and ax is not None:
+        if Ax.ndim != 3 or x.ndim != 4:
+            msg = (
+                "Ax and x should be 3D and 4D respectively when vectorizing "
+                f"over them simultaneously. Got: {Ax.shape=}; {x.shape=}."
+            )
+            raise ValueError(msg)
+        # vectorize over n_lhs
+        Ax = jnp.moveaxis(Ax, aAx, 0)
+        x = jnp.moveaxis(x, ax, 0)
+        shape = x.shape
+        Ax = Ax.reshape(Ax.shape[0] * Ax.shape[1], Ax.shape[2])
+        x = x.reshape(x.shape[0] * x.shape[1], x.shape[2], x.shape[3])
+        return prim.bind(Ai, Aj, Ax, x).reshape(*shape), 0
+    if aAx is not None:
+        if Ax.ndim != 3 or x.ndim != 3:
+            msg = (
+                "Ax and x should both be 3D when vectorizing "
+                f"over Ax. Got: {Ax.shape=}; {x.shape=}."
+            )
+            raise ValueError(msg)
+        # vectorize over n_lhs
+        ax = 0
+        Ax = jnp.moveaxis(Ax, aAx, 0)
+        x = jnp.broadcast_to(x[None], (Ax.shape[0], x.shape[0], x.shape[1], x.shape[2]))
+        shape = x.shape
+        Ax = Ax.reshape(Ax.shape[0] * Ax.shape[1], Ax.shape[2])
+        x = x.reshape(x.shape[0] * x.shape[1], x.shape[2], x.shape[3])
+        return prim.bind(Ai, Aj, Ax, x).reshape(*shape), 0
+    if ax is not None:
+        if Ax.ndim != 2 or x.ndim != 4:
+            msg = (
+                "Ax and x should both be 2D and 4D respectively when vectorizing "
+                f"over x. Got: {Ax.shape=}; {x.shape=}."
+            )
+            raise ValueError(msg)
+        # vectorize over n_rhs
+        x = jnp.moveaxis(x, ax, 3)
+        shape = x.shape
+        x = x.reshape(x.shape[0], x.shape[1], x.shape[2] * x.shape[3])
+        return prim.bind(Ai, Aj, Ax, x).reshape(*shape), 3
+    msg = "vmap failed. Please select an axis to vectorize over."
+    raise ValueError(msg)
+
+
+# Transposition =======================================================================
+
+
+def dot_f64_transpose(
+    ct: Array,
+    Ai: Array,
+    Aj: Array,
+    Ax: Array,
+    x: Array,
+) -> tuple[Array, Array, Array, Array]:
+    return dot_transpose(dot_f64, ct, Ai, Aj, Ax, x)
+
+
+ad.primitive_transposes[dot_f64] = dot_f64_transpose
+
+
+def dot_c128_transpose(
+    ct: Array,
+    Ai: Array,
+    Aj: Array,
+    Ax: Array,
+    x: Array,
+) -> tuple[Array, Array, Array, Array]:
+    return dot_transpose(dot_c128, ct, Ai, Aj, Ax, x)
+
+
+ad.primitive_transposes[dot_c128] = dot_c128_transpose
+
+
+def solve_f64_transpose(
+    ct: Array,
+    Ai: Array,
+    Aj: Array,
+    Ax: Array,
+    b: Array,
+) -> tuple[Array, Array, Array, Array]:
+    return solve_transpose(solve_f64, ct, Ai, Aj, Ax, b)
+
+
+ad.primitive_transposes[solve_f64] = solve_f64_transpose
+
+
+def solve_c128_transpose(
+    ct: Array,
+    Ai: Array,
+    Aj: Array,
+    Ax: Array,
+    b: Array,
+) -> tuple[Array, Array, Array, Array]:
+    return solve_transpose(solve_c128, ct, Ai, Aj, Ax, b)
+
+
+ad.primitive_transposes[solve_c128] = solve_c128_transpose
+
+
+def dot_transpose(
+    prim: jax.extend.core.Primitive,
+    ct: Array,
+    Ai: Array,
+    Aj: Array,
+    Ax: Array,
+    x: Array,
+) -> tuple[Array, Array, Array, Array]:
+    if ad.is_undefined_primal(Ai) or ad.is_undefined_primal(Aj):
+        msg = "Sparse indices Ai and Aj should not require gradients."
+        raise ValueError(msg)
+
+    if ad.is_undefined_primal(x):
+        # replace x by ct
+        return Aj, Ai, Ax, prim.bind(Aj, Ai, Ax, ct)
+
+    if ad.is_undefined_primal(Ax):
+        # replace Ax by ct
+        # not really sure what I'm doing here, but this makes test_3d_jacrev pass.
+        return Ai, Aj, (ct[:, Ai] * x[:, Aj, :]).sum(-1), x
+
+    msg = "No undefined primals in transpose."
+    raise ValueError(msg)
+
+
+def solve_transpose(
+    prim: jax.extend.core.Primitive,
+    ct: Array,
+    Ai: Array,
+    Aj: Array,
+    Ax: Array,
+    b: Array,
+) -> tuple[Array, Array, Array, Array]:
+    if ad.is_undefined_primal(Ai) or ad.is_undefined_primal(Aj):
+        msg = "Sparse indices Ai and Aj should not require gradients."
+        raise ValueError(msg)
 
     if ad.is_undefined_primal(b):
-        return None, None, None, coo_mul_vec(Aj, Ai, Ax.conj(), ct)  # = A.T@ct [= ct@A]
-    else:
-        dA = ct[Ai] * b[Aj]
-        dA = dA.reshape(dA.shape[0], -1).sum(-1)  # not sure about this...
-        return None, None, dA, None
+        b_bar = prim.bind(Aj, Ai, Ax, ct)
+        return Ai, Aj, Ax, b_bar
+
+    if ad.is_undefined_primal(Ax):
+        Ax_bar = -(ct * prim.bind(Ai, Aj, Ax, b)).sum(-1)
+        return Ai, Aj, Ax_bar, b
+
+    msg = "No undefined primals in transpose."
+    raise ValueError(msg)
 
 
-# Vectorization (vmap) ================================================================
+# Validators ==========================================================================
 
 
-@vmap_register(solve_f64, solve)
-@vmap_register(solve_c128, solve)
-@vmap_register(coo_mul_vec_f64, coo_mul_vec)
-@vmap_register(coo_mul_vec_c128, coo_mul_vec)
-def coo_vec_operation_vmap(operation, vector_arg_values, batch_axes):
-    aAi, aAj, aAx, ab = batch_axes
-    Ai, Aj, Ax, b = vector_arg_values
+def validate_args(  # noqa: C901,PLR0912
+    Ai: Array, Aj: Array, Ax: Array, x: Array, x_name: str = "x"
+) -> tuple[Array, Array, Array, Array, tuple[int, ...]]:
+    # cases:
+    # - (n_lhs, n_nz) x (n_lhs, n_col, n_rhs)
+    # - (n_lhs, n_nz) x (n_lhs, n_col) --> (n_lhs, n_nz) x (n_lhs, n_col, 1)
+    # - (n_nz,) x (n_lhs, n_col, n_rhs) --> (n_lhs, n_nz) x (n_lhs, n_col, n_rhs)
+    # - (n_nz,) x (n_col, n_rhs) --> (1, n_nz) x (1, n_col, n_rhs)
+    # - (n_nz,) x (n_col,) --> (1, n_nz) x (1, n_col, 1)
+    if Ai.ndim != 1:
+        msg = f"Ai should be 1D with shape (n_nz). Got: {Ai.shape=}."
+        raise ValueError(msg)
+    if Aj.ndim != 1:
+        msg = f"Aj should be 1D with shape (n_nz,). Got: {Aj.shape=}."
+        raise ValueError(msg)
+    if Ax.ndim == 0 or Ax.ndim > 2:
+        msg = (
+            "Ax should be 1D with shape (n_nz,) "
+            "or 2D with shape (n_lhs, n_nz). "
+            f"Got: {Ax.shape=}."
+        )
+        raise ValueError(msg)
+    if x.ndim == 0 or x.ndim > 3:
+        msg = (
+            f"{x_name} should be 1D with shape (n_col,) "
+            "or 2D with shape (n_col, n_rhs) "
+            "or 3D with shape (n_lhs, n_col, n_rhs). "
+            f"Got: {x_name}.shape={x.shape}."
+        )
+        raise ValueError(msg)
 
-    assert aAi is None, "Ai cannot be vectorized."
-    assert aAj is None, "Aj cannot be vectorized."
+    shape = x.shape
 
-    if aAx is not None and ab is not None:
-        assert isinstance(aAx, int) and isinstance(ab, int)
-        Ax = jnp.moveaxis(Ax, aAx, 0)  # treat as lhs
-        b = jnp.moveaxis(b, ab, 0)  # treat as lhs
-        result = operation(Ai, Aj, Ax, b)
-        return result, 0
+    if Ax.ndim == 1 and x.ndim == 1:  # expand Ax and b dims
+        debug(f"assuming (n_nz:={Ax.shape[0]},) x (n_col:={x.shape[0]},)")
+        Ax = Ax[None, :]
+        x = x[None, :, None]
+    elif Ax.ndim == 1 and x.ndim == 2:  # expand Ax and b dims
+        debug(
+            f"assuming (n_nz:={Ax.shape[0]},) x "
+            f"(n_col:={x.shape[0]}, n_rhs:={x.shape[1]})"
+        )
+        Ax = Ax[None, :]
+        x = x[None, :, :]
+    elif Ax.ndim == 1 and x.ndim == 3:  # expand A dim (broadcast will happen in base)
+        debug(
+            f"assuming (n_nz:={Ax.shape[0]},) x "
+            f"(n_lhs:={x.shape[0]}, n_col:={x.shape[1]}, n_rhs:={x.shape[2]})"
+        )
+        Ax = Ax[None, :]
+    elif Ax.ndim == 2 and x.ndim == 1:  # expand dims to base case
+        debug(
+            f"assuming (n_lhs:={Ax.shape[0]}, n_nz:={Ax.shape[1]}) x "
+            f"(n_col:={x.shape[1]},)"
+        )
+        x = x[None, :, None]
+        shape = (Ax.shape[0], shape[0])  # we need to expand the shape here.
+    elif Ax.ndim == 2 and x.ndim == 2:  # expand dims to base case
+        debug(
+            f"assuming (n_lhs:={Ax.shape[0]}, n_nz:={Ax.shape[1]}) x "
+            f"(n_lhs:={x.shape[0]}, n_col:={x.shape[1]})"
+        )
+        if Ax.shape[0] != x.shape[0] and Ax.shape[0] != 1 and x.shape[0] != 1:
+            msg = (
+                f"Ax (2D) and {x_name} (2D) should have their first shape "
+                f"index `n_lhs` match. Got: {Ax.shape=}; {x_name}.shape={x.shape}. "
+                f"assuming (n_lhs:={Ax.shape[0]}, n_nz:={Ax.shape[1]}) x "
+                f"(n_lhs:={x.shape[0]}, n_col:={x.shape[1]})"
+            )
+            raise ValueError(msg)
+        x = x[:, :, None]
+        if x.shape[0] == 1 and Ax.shape[0] > 0:
+            shape = (Ax.shape[0], *shape[1:])
 
-    if ab is None:
-        assert isinstance(aAx, int)
-        Ax = jnp.moveaxis(Ax, aAx, 0)  # treat as lhs
-        b = jnp.broadcast_to(b[None], (Ax.shape[0], *b.shape))
-        result = operation(Ai, Aj, Ax, b)
-        return result, 0
+    if Ax.ndim != 2 or x.ndim != 3:
+        msg = (
+            f"Invalid shapes for Ax and {x_name}. "
+            f"Got: {Ax.shape=}; {x_name}.shape={x.shape}. "
+            f"Expected: Ax.shape=([n_lhs],n_nz); "
+            f"{x_name}.shape=([n_lhs],n_col,[n_rhs])."
+        )
+        raise ValueError(msg)
 
-    if aAx is None:
-        assert isinstance(ab, int)
-        _log(f"vmap: {b.shape=}")
-        b = jnp.moveaxis(b, ab, -1)  # treat as rhs
-        _log(f"vmap: {b.shape=}")
-        shape = b.shape
-        if b.ndim == 0:
-            b = b[None, None, None]
-        elif b.ndim == 1:
-            b = b[None, None, :]
-        elif b.ndim == 2:
-            b = b[None, :, :]
-        elif b.ndim == 3:
-            b = b[:, :, :]
-
-        b = b.reshape(b.shape[0], b.shape[1], -1)
-
-        _log(f"vmap: {b.shape=}")
-        # b is now guaranteed to have shape (n_lhs, n_col, n_rhs)
-        result = operation(Ai, Aj, Ax, b)
-        result = result.reshape(*shape)
-        return result, -1
-
-    raise ValueError("invalid arguments for vmap")
+    # base case
+    debug(
+        f"assuming (n_lhs:={Ax.shape[0]}, n_nz:={Ax.shape[1]}) x "
+        f"(n_lhs:={x.shape[0]}, n_col:={x.shape[1]}, n_rhs:={x.shape[2]})"
+    )
+    if Ax.shape[0] != x.shape[0] and Ax.shape[0] != 1 and x.shape[0] != 1:
+        msg = (
+            f"Ax (2D) and {x_name} (3D) should have their first shape "
+            f"index `n_lhs` match. Got: {Ax.shape=}; {x_name}.shape={x.shape}."
+            f"assuming (n_lhs:={Ax.shape[0]}, n_nz:={Ax.shape[1]}) x "
+            f"(n_lhs:={x.shape[0]}, n_col:={x.shape[1]}, n_rhs:={x.shape[2]})"
+        )
+        raise ValueError(msg)
+    n_lhs = max(Ax.shape[0], x.shape[0])  # handle broadcastable 1-index
+    Ax = jnp.broadcast_to(Ax, (n_lhs, Ax.shape[1]))
+    x = jnp.broadcast_to(x, (n_lhs, x.shape[1], x.shape[2]))
+    if len(shape) == 3 and shape[0] != x.shape[0]:
+        shape = (Ax.shape[0], shape[1], shape[2])
+    return Ai, Aj, Ax, x, shape
