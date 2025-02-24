@@ -1,17 +1,17 @@
 dist:
-	python setup.py build sdist bdist_wheel
+	uv run python setup.py build sdist bdist_wheel
 
 .PHONY: build
 dev:
 	uv venv --python 3.12
 	uv sync --all-extras
-	python setup.py build_ext --inplace
+	uv run python setup.py build_ext --inplace
 
 inplace:
-	python setup.py build_ext --inplace
+	uv run python setup.py build_ext --inplace
 
 test:
-	pytest tests.py
+	uv run pytest tests.py
 
 .PHONY: suitesparse
 suitesparse:

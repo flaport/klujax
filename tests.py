@@ -7,7 +7,6 @@ import jax.scipy as jsp
 import numpy as np
 import pytest
 from jax import lax
-from jaxlib.xla_extension import XlaRuntimeError
 
 import klujax
 from klujax import COMPLEX_DTYPES, coalesce
@@ -39,39 +38,36 @@ def parametrize_ops(func):
     return pytest.mark.parametrize("op_sparse", [klujax.solve])(func)
 
 
-@pytest.mark.skip
 @log_test_name
 @parametrize_dtypes
 @parametrize_ops
 def test_1d(dtype, op_sparse):
     op_dense = OPS_DENSE[op_sparse]
-    Ai, Aj, Ax, b = _get_rand_arrs_1d(8, (n_col := 5), dtype=dtype)
+    Ai, Aj, Ax, b = _get_rand_arrs_1d(15, (n_col := 5), dtype=dtype)
     x_sp = op_sparse(Ai, Aj, Ax, b)
     A = jnp.zeros((n_col, n_col), dtype=Ax.dtype).at[Ai, Aj].add(Ax)
     x = op_dense(A, b)
     _log_and_test_equality(x, x_sp)
 
 
-@pytest.mark.skip
 @log_test_name
 @parametrize_dtypes
 @parametrize_ops
 def test_2d(dtype, op_sparse):
     op_dense = jax.vmap(OPS_DENSE[op_sparse], (0, 0), 0)
-    Ai, Aj, Ax, b = _get_rand_arrs_2d((n_lhs := 3), 8, (n_col := 5), dtype=dtype)
+    Ai, Aj, Ax, b = _get_rand_arrs_2d((n_lhs := 3), 15, (n_col := 5), dtype=dtype)
     x_sp = op_sparse(Ai, Aj, Ax, b)
     A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
     x = op_dense(A, b)
     _log_and_test_equality(x, x_sp)
 
 
-@pytest.mark.skip
 @log_test_name
 @parametrize_dtypes
 @parametrize_ops
 def test_2d_vmap(dtype, op_sparse):
     op_dense = OPS_DENSE[op_sparse]
-    Ai, Aj, Ax, b = _get_rand_arrs_2d((n_lhs := 3), 8, (n_col := 5), dtype=dtype)
+    Ai, Aj, Ax, b = _get_rand_arrs_2d((n_lhs := 3), 15, (n_col := 5), dtype=dtype)
     x_sp = jax.vmap(op_sparse, (None, None, 1, 1), 0)(Ai, Aj, Ax.T, b.T)
     A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
     x = jax.vmap(op_dense, (0, 0), 0)(A, b)
@@ -132,13 +128,12 @@ def test_3d_jacrev(dtype, op_sparse):
     _log_and_test_equality(jac_sp, jac)
 
 
-@pytest.mark.skip
 @log_test_name
 @parametrize_dtypes
 @parametrize_ops
 def test_3d_vmap(dtype, op_sparse):
     op_dense = OPS_DENSE[op_sparse]
-    Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 8, (n_col := 5), 2, dtype=dtype)
+    Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 15, (n_col := 5), 2, dtype=dtype)
     _log(Ai_shape=Ai.shape, Aj_shape=Aj.shape, Ax_shape=Ax.shape, b_shape=b.shape)
     x_sp = jax.vmap(op_sparse, (None, None, None, -1), -1)(Ai, Aj, Ax, b)
     A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
@@ -146,12 +141,11 @@ def test_3d_vmap(dtype, op_sparse):
     _log_and_test_equality(x, x_sp)
 
 
-@pytest.mark.skip
 @log_test_name
 @parametrize_dtypes
 @parametrize_ops
 def test_4d(dtype, op_sparse):
-    Ai, Aj, Ax, b = _get_rand_arrs_3d(3, 8, 5, 2, dtype=dtype)
+    Ai, Aj, Ax, b = _get_rand_arrs_3d(3, 15, 5, 2, dtype=dtype)
     with pytest.raises(ValueError):  # noqa: PT011
         op_sparse(Ai, Aj, Ax, b[None])
 
@@ -173,25 +167,6 @@ def test_4d_vmap(dtype, op_sparse):
     r2 = op_sparse(Ai, Aj, Ax, b2)
     _log_and_test_equality(r[0], r1)
     _log_and_test_equality(r[1], r2)
-
-
-@pytest.mark.skip
-@log_test_name
-@parametrize_dtypes
-@parametrize_ops
-def test_vmap_fail(dtype, op_sparse):
-    n_lhs = 23
-    n_nz = 8
-    n_col = 5
-    n_rhs = 1
-
-    Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(33), 4)
-    Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
-    Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
-    Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
-    b = jax.random.normal(bkey, (n_lhs, n_col, n_rhs), dtype=dtype)
-    with pytest.raises(XlaRuntimeError):
-        jax.vmap(op_sparse, in_axes=(None, None, None, 0), out_axes=0)(Ai, Aj, Ax, b)
 
 
 def _get_rand_arrs_1d(n_nz, n_col, *, dtype, seed=33):
