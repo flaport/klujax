@@ -253,16 +253,6 @@ ffi::Error solve_f64(
     const double *_b = b.typed_data();
     double *_x = x->typed_data();
 
-    // copy b into x and transpose the last two dimensions since KLU expects col-major layout
-    // b itself won't be used anymore. KLU works on x in-place.
-    for (int m = 0; m < n_lhs; m++) {
-        for (int n = 0; n < n_col; n++) {
-            for (int p = 0; p < n_rhs; p++) {
-                _x[m * n_rhs * n_col + p * n_col + n] = _b[m * n_col * n_rhs + n * n_rhs + p];
-            }
-        }
-    }
-
     // get COO -> CSC transformation information
     int *_Bk = new int[n_nz]();  // Ax -> Bx transformation indices
     int *_Bi = new int[n_nz]();
@@ -270,6 +260,17 @@ ffi::Error solve_f64(
     double *_Bx = new double[n_nz]();
 
     coo_to_csc_analyze(n_col, n_nz, _Ai, _Aj, _Bi, _Bp, _Bk);
+
+    // copy b into x (temp) and transpose the last two dimensions since KLU expects col-major layout
+    // b itself won't be used anymore. KLU works on x (temp) in-place.
+    // double *_x_temp = new double[n_lhs * n_col * n_rhs]();
+    for (int m = 0; m < n_lhs; m++) {
+        for (int n = 0; n < n_col; n++) {
+            for (int p = 0; p < n_rhs; p++) {
+                _x[m * n_rhs * n_col + p * n_col + n] = _b[m * n_col * n_rhs + n * n_rhs + p];
+            }
+        }
+    }
 
     // initialize KLU for given sparsity pattern
     klu_symbolic *Symbolic;
@@ -294,6 +295,16 @@ ffi::Error solve_f64(
         klu_solve(Symbolic, Numeric, n_col, n_rhs, &_x[n], &Common);
     }
 
+    // // copy x (temp) into x and transpose the last two dimensions since python expects row-major layout
+    // // FIXME: we can probably get rid of this extra copying (+transposing) at the end by using klu_l_solve on _x in row-major form
+    // for (int m = 0; m < n_lhs; m++) {
+    //     for (int n = 0; n < n_col; n++) {
+    //         for (int p = 0; p < n_rhs; p++) {
+    //             _x[m * n_rhs * n_col + p * n_col + n] = _x_temp[m * n_col * n_rhs + n * n_rhs + p];
+    //         }
+    //     }
+    // }
+
     // clean up
     klu_free_symbolic(&Symbolic, &Common);
     klu_free_numeric(&Numeric, &Common);
@@ -301,6 +312,7 @@ ffi::Error solve_f64(
     delete[] _Bi;
     delete[] _Bp;
     delete[] _Bx;
+    // delete[] _x_temp;
 
     return ffi::Error::Success();
 }
