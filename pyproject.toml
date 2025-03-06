@@ -15,8 +15,8 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Mathematics"
 ]
 dependencies = [
-  "jax>=0.5.1",
-  "jaxlib>=0.5.1",
+  "jax>=0.5.0",
+  "jaxlib>=0.5.0",
   "jaxtyping>=0.2.38",
   "numpy>=2"
 ]
