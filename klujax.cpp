@@ -293,6 +293,7 @@ ffi::Error solve_f64(
         // solve using KLU
         Numeric = klu_factor(_Bp, _Bi, _Bx, Symbolic, &Common);
         klu_solve(Symbolic, Numeric, n_col, n_rhs, &_x_temp[n], &Common);
+        klu_free_numeric(&Numeric, &Common); // Free Numeric after each iteration
     }
 
     // copy _x_temp into _x and transpose the last two dimensions since JAX expects row-major layout
@@ -309,7 +310,6 @@ ffi::Error solve_f64(
 
     // clean up
     klu_free_symbolic(&Symbolic, &Common);
-    klu_free_numeric(&Numeric, &Common);
     delete[] _Bk;
     delete[] _Bi;
     delete[] _Bp;
@@ -392,6 +392,7 @@ ffi::Error solve_c128(
         // solve using KLU
         Numeric = klu_z_factor(_Bp, _Bi, _Bx, Symbolic, &Common);
         klu_z_solve(Symbolic, Numeric, n_col, n_rhs, &_x_temp[2 * n], &Common);
+        klu_free_numeric(&Numeric, &Common); // Free Numeric after each iteration
     }
 
     // copy _x_temp into _x and transpose the last two dimensions since JAX expects row-major layout
@@ -406,6 +407,14 @@ ffi::Error solve_c128(
             }
         }
     }
+
+    // clean up - add missing deallocations
+    klu_free_symbolic(&Symbolic, &Common);
+    delete[] _Bk;
+    delete[] _Bi;
+    delete[] _Bp;
+    delete[] _Bx;
+    delete[] _x_temp;
 
     return ffi::Error::Success();
 }
