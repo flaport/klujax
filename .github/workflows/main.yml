@@ -17,17 +17,19 @@ jobs:
         include:
           - os: ubuntu-latest
             cibw_archs: 'native'
-          - os: ubuntu-arm-2core
+          - os: ubuntu-latest
             cibw_archs: 'aarch64'
-            if: startsWith(github.ref, 'refs/tags/')
           - os: windows-latest
             cibw_archs: 'native ARM64'
-            if: startsWith(github.ref, 'refs/tags/')
           - os: macos-latest
-            cibw_archs: 'native arm64'
-            if: startsWith(github.ref, 'refs/tags/')
+            cibw_archs: 'native'
 
     steps:
+      - name: Set up QEMU
+        if: matrix.cibw_archs == 'aarch64'
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: arm64
       - name: Checkout Repository
         uses: actions/checkout@v4
       - name: Clone Suitesparse
@@ -46,7 +48,7 @@ jobs:
       - name: Upload Wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}
+          name: wheels-${{ matrix.os }}-${{ matrix.cibw_archs }}
           path: ./wheelhouse/*.whl
           overwrite: true
 
@@ -64,22 +66,22 @@ jobs:
       - name: Download Linux (x86) wheels
         uses: actions/download-artifact@v4
         with:
-          name: wheels-ubuntu-latest
+          name: wheels-ubuntu-latest-native
           path: dist
       - name: Download Linux (ARM) wheels
         uses: actions/download-artifact@v4
         with:
-          name: gfp-wheels-ubuntu-arm-2core
+          name: gfp-wheels-ubuntu-latest-aarch64
           path: dist
       - name: Download Windows wheels
         uses: actions/download-artifact@v4
         with:
-          name: wheels-windows-latest
+          name: "wheels-windows-latest-native ARM64"
           path: dist
       - name: Download MacOS wheels
         uses: actions/download-artifact@v4
         with:
-          name: wheels-macos-latest
+          name: wheels-macos-latest-native
           path: dist
       - name: Release to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
