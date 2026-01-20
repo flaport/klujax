@@ -23,7 +23,7 @@ from jaxtyping import Array
 
 # Config ==============================================================================
 
-DEBUG = os.environ.get("KLUJAX_DEBUG", False)
+DEBUG = bool(os.environ.get("KLUJAX_DEBUG", "0"))
 jax.config.update(name="jax_enable_x64", val=True)
 jax.config.update(name="jax_platform_name", val="cpu")
 debug = lambda s: None if not DEBUG else print(s, file=sys.stderr)  # noqa: E731,T201
