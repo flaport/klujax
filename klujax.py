@@ -23,7 +23,7 @@ from jaxtyping import Array
 
 # Config ==============================================================================
 
-DEBUG = os.environ.get("KLUJAX_DEBUG", False)
+DEBUG = bool(os.environ.get("KLUJAX_DEBUG", "0"))
 jax.config.update(name="jax_enable_x64", val=True)
 jax.config.update(name="jax_platform_name", val="cpu")
 debug = lambda s: None if not DEBUG else print(s, file=sys.stderr)  # noqa: E731,T201
@@ -113,10 +113,10 @@ def dot(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
 
 
 def coalesce(
-    Ai: jax.Array,
-    Aj: jax.Array,
-    Ax: jax.Array,
-) -> tuple[jax.Array, jax.Array, jax.Array]:
+    Ai: Array,
+    Aj: Array,
+    Ax: Array,
+) -> tuple[Array, Array, Array]:
     """Coalesce a sparse matrix by summing duplicate indices.
 
     Args:
@@ -296,9 +296,10 @@ def solve_value_and_jvp(
 ) -> tuple[Array, Array]:
     Ai, Aj, Ax, b = arg_values
     dAi, dAj, dAx, db = arg_tangents
+    if not isinstance(dAi, ad.Zero) or not isinstance(dAj, ad.Zero):
+        msg = "Sparse indices Ai and Aj should not require gradients."
+        raise ValueError(msg)  # noqa: TRY004
     dAx = dAx if not isinstance(dAx, ad.Zero) else lax.zeros_like_array(Ax)
-    dAi = dAi if not isinstance(dAi, ad.Zero) else lax.zeros_like_array(Ai)
-    dAj = dAj if not isinstance(dAj, ad.Zero) else lax.zeros_like_array(Aj)
     db = db if not isinstance(db, ad.Zero) else lax.zeros_like_array(b)
     x = prim_solve.bind(Ai, Aj, Ax, b)
     dA_x = prim_dot.bind(Ai, Aj, dAx, x)
@@ -314,9 +315,10 @@ def dot_value_and_jvp(
 ) -> tuple[Array, Array]:
     Ai, Aj, Ax, b = arg_values
     dAi, dAj, dAx, db = arg_tangents
+    if not isinstance(dAi, ad.Zero) or not isinstance(dAj, ad.Zero):
+        msg = "Sparse indices Ai and Aj should not require gradients."
+        raise ValueError(msg)  # noqa: TRY004
     dAx = dAx if not isinstance(dAx, ad.Zero) else lax.zeros_like_array(Ax)
-    dAi = dAi if not isinstance(dAi, ad.Zero) else lax.zeros_like_array(Ai)
-    dAj = dAj if not isinstance(dAj, ad.Zero) else lax.zeros_like_array(Aj)
     db = db if not isinstance(db, ad.Zero) else lax.zeros_like_array(b)
     x = prim.bind(Ai, Aj, Ax, b)
     dA_b = prim.bind(Ai, Aj, dAx, b)
@@ -500,8 +502,7 @@ def dot_transpose(
         return Aj, Ai, Ax, prim.bind(Aj, Ai, Ax, ct)
 
     if ad.is_undefined_primal(Ax):
-        # replace Ax by ct
-        # not really sure what I'm doing here, but this makes test_3d_jacrev pass.
+        # ∂L/∂Ax[m,n] = Σₖ ct[m, Ai[n], k] · x[m, Aj[n], k]
         return Ai, Aj, (ct[:, Ai] * x[:, Aj, :]).sum(-1), x
 
     msg = "No undefined primals in transpose."
@@ -588,7 +589,7 @@ def validate_args(  # noqa: C901,PLR0912
     elif Ax.ndim == 2 and x.ndim == 1:  # expand dims to base case
         debug(
             f"assuming (n_lhs:={Ax.shape[0]}, n_nz:={Ax.shape[1]}) x "
-            f"(n_col:={x.shape[1]},)"
+            f"(n_col:={x.shape[0]},)"
         )
         x = x[None, :, None]
         shape = (Ax.shape[0], shape[0])  # we need to expand the shape here.

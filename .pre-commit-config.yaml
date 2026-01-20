@@ -1,25 +1,26 @@
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.9.5
+    rev: v0.14.13
     hooks:
       - id: ruff-format
         stages: [pre-commit]
         args: ["--config", "pyproject.toml"]
         types_or: [python, jupyter]
-      - id: ruff
+      - id: ruff-check
         stages: [pre-commit]
         args: ["--fix", "--config", "pyproject.toml"]
         types_or: [python]
   - repo: https://github.com/pocc/pre-commit-hooks
-    rev: "336fdd7"
+    rev: v1.3.5
     hooks:
       - id: clang-format
+        args: ["-i"]
   - repo: https://github.com/kynan/nbstripout
-    rev: 0.7.1
+    rev: 0.9.0
     hooks:
       - id: nbstripout
   - repo: https://github.com/macisamuele/language-formatters-pre-commit-hooks
-    rev: v2.13.0
+    rev: v2.16.0
     hooks:
       - id: pretty-format-toml
         args: [--autofix]
