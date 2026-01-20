@@ -33,15 +33,18 @@ jobs:
       - name: Checkout Repository
         if: startsWith(github.ref, 'refs/tags/') || matrix.os == 'ubuntu-latest' && matrix.cibw_archs == 'native'
         uses: actions/checkout@v4
+      - name: Install just
+        if: startsWith(github.ref, 'refs/tags/') || matrix.os == 'ubuntu-latest' && matrix.cibw_archs == 'native'
+        uses: extractions/setup-just@v2
       - name: Clone Suitesparse
         if: startsWith(github.ref, 'refs/tags/') || matrix.os == 'ubuntu-latest' && matrix.cibw_archs == 'native'
-        run: make suitesparse
+        run: just suitesparse
       - name: Clone XLA
         if: startsWith(github.ref, 'refs/tags/') || matrix.os == 'ubuntu-latest' && matrix.cibw_archs == 'native'
-        run: make xla
+        run: just xla
       - name: Clone Pybind11
         if: startsWith(github.ref, 'refs/tags/') || matrix.os == 'ubuntu-latest' && matrix.cibw_archs == 'native'
-        run: make pybind11
+        run: just pybind11
       - name: Build Wheels
         if: startsWith(github.ref, 'refs/tags/') || matrix.os == 'ubuntu-latest' && matrix.cibw_archs == 'native'
         uses: pypa/cibuildwheel@v3.3.0
