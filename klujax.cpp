@@ -10,6 +10,7 @@ namespace py = pybind11;
 namespace ffi = xla::ffi;
 
 #include <cstring>  // for memset
+#include <memory>   // for unique_ptr
 
 ffi::Error validate_dot_f64_args(
     const ffi::Buffer<ffi::DataType::S32>& Ai,
@@ -261,17 +262,17 @@ ffi::Error solve_f64(
     const double* _b = b.typed_data();
     double* _x = x->typed_data();
 
-    // get COO -> CSC transformation information
-    int* _Bk = new int[n_nz]();  // Ax -> Bx transformation indices
-    int* _Bi = new int[n_nz]();
-    int* _Bp = new int[n_col + 1]();
-    double* _Bx = new double[n_nz]();
+    // get COO -> CSC transformation information (using RAII for automatic cleanup)
+    auto _Bk = std::make_unique<int[]>(n_nz);  // Ax -> Bx transformation indices
+    auto _Bi = std::make_unique<int[]>(n_nz);
+    auto _Bp = std::make_unique<int[]>(n_col + 1);
+    auto _Bx = std::make_unique<double[]>(n_nz);
 
-    coo_to_csc_analyze(n_col, n_nz, _Ai, _Aj, _Bi, _Bp, _Bk);
+    coo_to_csc_analyze(n_col, n_nz, _Ai, _Aj, _Bi.get(), _Bp.get(), _Bk.get());
 
     // copy _b into _x_temp and transpose the last two dimensions since KLU expects col-major layout
     // _b itself won't be used anymore. KLU works on _x_temp in-place.
-    double* _x_temp = new double[n_lhs * n_col * n_rhs]();
+    auto _x_temp = std::make_unique<double[]>(n_lhs * n_col * n_rhs);
     for (int m = 0; m < n_lhs; m++) {
         for (int n = 0; n < n_col; n++) {
             for (int p = 0; p < n_rhs; p++) {
@@ -285,7 +286,7 @@ ffi::Error solve_f64(
     klu_numeric* Numeric;
     klu_common Common;
     klu_defaults(&Common);
-    Symbolic = klu_analyze(n_col, _Bp, _Bi, &Common);
+    Symbolic = klu_analyze(n_col, _Bp.get(), _Bi.get(), &Common);
 
     // solve for all elements in batch:
     // NOTE: same sparsity pattern for each element in batch assumed
@@ -299,15 +300,9 @@ ffi::Error solve_f64(
         }
 
         // solve using KLU
-        Numeric = klu_factor(_Bp, _Bi, _Bx, Symbolic, &Common);
+        Numeric = klu_factor(_Bp.get(), _Bi.get(), _Bx.get(), Symbolic, &Common);
         if (Numeric == nullptr) {
-            // Clean up on error
             klu_free_symbolic(&Symbolic, &Common);
-            delete[] _Bk;
-            delete[] _Bi;
-            delete[] _Bp;
-            delete[] _Bx;
-            delete[] _x_temp;
             return ffi::Error::InvalidArgument("klu_factor failed (singular matrix?)");
         }
         klu_solve(Symbolic, Numeric, n_col, n_rhs, &_x_temp[n], &Common);
@@ -326,14 +321,7 @@ ffi::Error solve_f64(
         }
     }
 
-    // clean up
     klu_free_symbolic(&Symbolic, &Common);
-    delete[] _Bk;
-    delete[] _Bi;
-    delete[] _Bp;
-    delete[] _Bx;
-    delete[] _x_temp;
-
     return ffi::Error::Success();
 }
 
@@ -369,16 +357,16 @@ ffi::Error solve_c128(
     const double* _b = (double*)b.typed_data();
     double* _x = (double*)x->typed_data();
 
-    // get COO -> CSC transformation information
-    int* _Bk = new int[n_nz]();       // Ax -> Bx transformation indices
-    int* _Bi = new int[n_nz]();       // CSC row indices
-    int* _Bp = new int[n_col + 1]();  // CSC column pointers
-    double* _Bx = new double[2 * n_nz]();
-    coo_to_csc_analyze(n_col, n_nz, _Ai, _Aj, _Bi, _Bp, _Bk);
+    // get COO -> CSC transformation information (using RAII for automatic cleanup)
+    auto _Bk = std::make_unique<int[]>(n_nz);       // Ax -> Bx transformation indices
+    auto _Bi = std::make_unique<int[]>(n_nz);       // CSC row indices
+    auto _Bp = std::make_unique<int[]>(n_col + 1);  // CSC column pointers
+    auto _Bx = std::make_unique<double[]>(2 * n_nz);
+    coo_to_csc_analyze(n_col, n_nz, _Ai, _Aj, _Bi.get(), _Bp.get(), _Bk.get());
 
     // copy _b into _x_temp and transpose the last two dimensions since KLU expects col-major layout
     // _b itself won't be used anymore. KLU works on _x_temp in-place.
-    double* _x_temp = new double[2 * n_lhs * n_col * n_rhs]();
+    auto _x_temp = std::make_unique<double[]>(2 * n_lhs * n_col * n_rhs);
     for (int m = 0; m < n_lhs; m++) {
         for (int n = 0; n < n_col; n++) {
             for (int p = 0; p < n_rhs; p++) {
@@ -393,7 +381,7 @@ ffi::Error solve_c128(
     klu_numeric* Numeric;
     klu_common Common;
     klu_defaults(&Common);
-    Symbolic = klu_analyze(n_col, _Bp, _Bi, &Common);
+    Symbolic = klu_analyze(n_col, _Bp.get(), _Bi.get(), &Common);
 
     // solve for all elements in batch:
     // NOTE: same sparsity pattern for each element in batch assumed
@@ -408,15 +396,9 @@ ffi::Error solve_c128(
         }
 
         // solve using KLU
-        Numeric = klu_z_factor(_Bp, _Bi, _Bx, Symbolic, &Common);
+        Numeric = klu_z_factor(_Bp.get(), _Bi.get(), _Bx.get(), Symbolic, &Common);
         if (Numeric == nullptr) {
-            // Clean up on error
             klu_free_symbolic(&Symbolic, &Common);
-            delete[] _Bk;
-            delete[] _Bi;
-            delete[] _Bp;
-            delete[] _Bx;
-            delete[] _x_temp;
             return ffi::Error::InvalidArgument("klu_z_factor failed (singular matrix?)");
         }
         klu_z_solve(Symbolic, Numeric, n_col, n_rhs, &_x_temp[2 * n], &Common);
@@ -436,14 +418,7 @@ ffi::Error solve_c128(
         }
     }
 
-    // clean up - add missing deallocations
     klu_free_symbolic(&Symbolic, &Common);
-    delete[] _Bk;
-    delete[] _Bi;
-    delete[] _Bp;
-    delete[] _Bx;
-    delete[] _x_temp;
-
     return ffi::Error::Success();
 }
 
