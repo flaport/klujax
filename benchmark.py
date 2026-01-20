@@ -1,21 +1,22 @@
-"""Benchmark script for klujax dot performance testing.
-
-Run this before and after loop reordering to measure the impact.
-Target runtime: ~20s total.
-"""
+"""Benchmark script for klujax dot performance testing."""
 
 import time
 
 import jax.numpy as jnp
 import numpy as np
+from jax import Array
 
 import klujax
 from klujax import coalesce
 
 
 def generate_sparse_diagonally_dominant(
-    n_col, density, n_lhs, dtype=np.float64, seed=42
-):
+    n_col: int,
+    density: float,
+    n_lhs: int,
+    dtype: type = np.float64,
+    seed: int = 42,
+) -> tuple[Array, Array, Array]:
     """Generate a sparse diagonally dominant matrix (guaranteed invertible)."""
     rng = np.random.RandomState(seed)
 
@@ -36,7 +37,14 @@ def generate_sparse_diagonally_dominant(
     return Ai, Aj, Ax
 
 
-def benchmark_dot(Ai, Aj, Ax, x, warmup=2, iterations=10):
+def benchmark_dot(
+    Ai: Array,
+    Aj: Array,
+    Ax: Array,
+    x: Array,
+    warmup: int = 2,
+    iterations: int = 10,
+) -> list[float]:
     """Benchmark klujax.dot performance."""
     for _ in range(warmup):
         b = klujax.dot(Ai, Aj, Ax, x)
@@ -53,8 +61,8 @@ def benchmark_dot(Ai, Aj, Ax, x, warmup=2, iterations=10):
     return times
 
 
-def main():
-    # Fixed config that gives ~20s runtime
+def main() -> None:
+    """Run the benchmark."""
     n_col = 404
     n_lhs = 14580
     density = 0.1
@@ -72,13 +80,13 @@ def main():
     print()
 
     times = benchmark_dot(Ai, Aj, Ax, x, warmup=2, iterations=iterations)
-    times = np.array(times)
+    times_arr = np.array(times)
 
-    print(f"Mean:  {times.mean() * 1000:8.2f} ms")
-    print(f"Std:   {times.std() * 1000:8.2f} ms")
-    print(f"Min:   {times.min() * 1000:8.2f} ms")
-    print(f"Max:   {times.max() * 1000:8.2f} ms")
-    print(f"Total: {times.sum():8.2f} s")
+    print(f"Mean:  {times_arr.mean() * 1000:8.2f} ms")
+    print(f"Std:   {times_arr.std() * 1000:8.2f} ms")
+    print(f"Min:   {times_arr.min() * 1000:8.2f} ms")
+    print(f"Max:   {times_arr.max() * 1000:8.2f} ms")
+    print(f"Total: {times_arr.sum():8.2f} s")
     print("=" * 50)
 
 
