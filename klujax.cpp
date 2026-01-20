@@ -2,8 +2,11 @@
 // Imports
 
 #include <cmath>
+#include <complex>
 
 #include "klu.h"
+#include "pybind11/complex.h"
+#include "pybind11/numpy.h"
 #include "pybind11/pybind11.h"
 #include "xla/ffi/api/ffi.h"
 namespace py = pybind11;
@@ -11,6 +14,99 @@ namespace ffi = xla::ffi;
 
 #include <cstring>  // for memset
 #include <memory>   // for unique_ptr
+#include <mutex>
+#include <unordered_map>
+
+// =============================================================================
+// Handle-based caching for KLU symbolic and numeric factorizations
+// This allows reusing klu_analyze results across multiple solves
+// =============================================================================
+
+// Cache entry for symbolic factorization
+struct SymbolicEntry {
+    klu_symbolic* symbolic;
+    klu_common common;
+    int n_col;
+};
+
+// Cache entry for numeric factorization
+struct NumericEntry {
+    klu_numeric* numeric;
+    int64_t symbolic_handle;  // reference to parent symbolic
+};
+
+// Global caches with thread-safe access
+static std::mutex g_symbolic_mutex;
+static std::unordered_map<int64_t, SymbolicEntry> g_symbolic_cache;
+static int64_t g_next_symbolic_handle = 1;
+
+static std::mutex g_numeric_mutex;
+static std::unordered_map<int64_t, NumericEntry> g_numeric_cache;
+static int64_t g_next_numeric_handle = 1;
+
+// Helper to allocate a new symbolic handle
+int64_t allocate_symbolic_handle(klu_symbolic* sym, klu_common common, int n_col) {
+    std::lock_guard<std::mutex> lock(g_symbolic_mutex);
+    int64_t handle = g_next_symbolic_handle++;
+    g_symbolic_cache[handle] = {sym, common, n_col};
+    return handle;
+}
+
+// Helper to get symbolic entry (returns nullptr if not found)
+SymbolicEntry* get_symbolic_entry(int64_t handle) {
+    std::lock_guard<std::mutex> lock(g_symbolic_mutex);
+    auto it = g_symbolic_cache.find(handle);
+    if (it == g_symbolic_cache.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+// Helper to free symbolic handle
+bool free_symbolic_handle(int64_t handle) {
+    std::lock_guard<std::mutex> lock(g_symbolic_mutex);
+    auto it = g_symbolic_cache.find(handle);
+    if (it == g_symbolic_cache.end()) {
+        return false;
+    }
+    klu_free_symbolic(&it->second.symbolic, &it->second.common);
+    g_symbolic_cache.erase(it);
+    return true;
+}
+
+// Helper to allocate a new numeric handle
+int64_t allocate_numeric_handle(klu_numeric* num, int64_t symbolic_handle) {
+    std::lock_guard<std::mutex> lock(g_numeric_mutex);
+    int64_t handle = g_next_numeric_handle++;
+    g_numeric_cache[handle] = {num, symbolic_handle};
+    return handle;
+}
+
+// Helper to get numeric entry (returns nullptr if not found)
+NumericEntry* get_numeric_entry(int64_t handle) {
+    std::lock_guard<std::mutex> lock(g_numeric_mutex);
+    auto it = g_numeric_cache.find(handle);
+    if (it == g_numeric_cache.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+// Helper to free numeric handle
+bool free_numeric_handle(int64_t handle) {
+    std::lock_guard<std::mutex> lock(g_numeric_mutex);
+    auto it = g_numeric_cache.find(handle);
+    if (it == g_numeric_cache.end()) {
+        return false;
+    }
+    // Need to get the symbolic entry to free numeric properly
+    SymbolicEntry* sym_entry = get_symbolic_entry(it->second.symbolic_handle);
+    if (sym_entry) {
+        klu_free_numeric(&it->second.numeric, &sym_entry->common);
+    }
+    g_numeric_cache.erase(it);
+    return true;
+}
 
 ffi::Error validate_dot_f64_args(
     const ffi::Buffer<ffi::DataType::S32>& Ai,
@@ -719,6 +815,203 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::DataType::C128>>()  // x
 );
 
+// =============================================================================
+// True split-solve API: klu_analyze, klu_factor, klu_solve as separate functions
+// These use handle-based caching to persist factorizations across calls
+// =============================================================================
+
+// klu_analyze: Perform symbolic analysis on CSC sparsity pattern
+// Input: Bp (n_col+1,), Bi (n_nz,) - CSC format column pointers and row indices
+// Output: handle (int64) that can be passed to klu_factor
+int64_t klu_analyze_csc(
+    py::array_t<int32_t> Bp,
+    py::array_t<int32_t> Bi) {
+    auto Bp_buf = Bp.request();
+    auto Bi_buf = Bi.request();
+
+    if (Bp_buf.ndim != 1 || Bi_buf.ndim != 1) {
+        throw std::runtime_error("Bp and Bi must be 1D arrays");
+    }
+
+    int n_col = (int)Bp_buf.shape[0] - 1;
+    const int* _Bp = static_cast<const int*>(Bp_buf.ptr);
+    const int* _Bi = static_cast<const int*>(Bi_buf.ptr);
+
+    klu_common Common;
+    klu_defaults(&Common);
+    klu_symbolic* Symbolic = klu_analyze(n_col, const_cast<int*>(_Bp), const_cast<int*>(_Bi), &Common);
+
+    if (Symbolic == nullptr || Common.status < KLU_OK) {
+        throw std::runtime_error("klu_analyze failed");
+    }
+
+    return allocate_symbolic_handle(Symbolic, Common, n_col);
+}
+
+// klu_factor_f64: Perform numeric factorization using pre-computed symbolic analysis
+// Input: symbolic_handle, Bp, Bi, Bx (CSC format values)
+// Output: handle (int64) that can be passed to klu_solve
+int64_t klu_factor_csc_f64(
+    int64_t symbolic_handle,
+    py::array_t<int32_t> Bp,
+    py::array_t<int32_t> Bi,
+    py::array_t<double> Bx) {
+    SymbolicEntry* sym_entry = get_symbolic_entry(symbolic_handle);
+    if (sym_entry == nullptr) {
+        throw std::runtime_error("Invalid symbolic handle");
+    }
+
+    auto Bp_buf = Bp.request();
+    auto Bi_buf = Bi.request();
+    auto Bx_buf = Bx.request();
+
+    const int* _Bp = static_cast<const int*>(Bp_buf.ptr);
+    const int* _Bi = static_cast<const int*>(Bi_buf.ptr);
+    double* _Bx = static_cast<double*>(Bx_buf.ptr);
+
+    klu_numeric* Numeric = klu_factor(
+        const_cast<int*>(_Bp), const_cast<int*>(_Bi), _Bx,
+        sym_entry->symbolic, &sym_entry->common);
+
+    if (Numeric == nullptr || sym_entry->common.status < KLU_OK) {
+        throw std::runtime_error("klu_factor failed (singular matrix?)");
+    }
+
+    return allocate_numeric_handle(Numeric, symbolic_handle);
+}
+
+// klu_factor_c128: Perform numeric factorization for complex128
+int64_t klu_factor_csc_c128(
+    int64_t symbolic_handle,
+    py::array_t<int32_t> Bp,
+    py::array_t<int32_t> Bi,
+    py::array_t<std::complex<double>> Bx) {
+    SymbolicEntry* sym_entry = get_symbolic_entry(symbolic_handle);
+    if (sym_entry == nullptr) {
+        throw std::runtime_error("Invalid symbolic handle");
+    }
+
+    auto Bp_buf = Bp.request();
+    auto Bi_buf = Bi.request();
+    auto Bx_buf = Bx.request();
+
+    const int* _Bp = static_cast<const int*>(Bp_buf.ptr);
+    const int* _Bi = static_cast<const int*>(Bi_buf.ptr);
+    double* _Bx = static_cast<double*>(Bx_buf.ptr);
+
+    klu_numeric* Numeric = klu_z_factor(
+        const_cast<int*>(_Bp), const_cast<int*>(_Bi), _Bx,
+        sym_entry->symbolic, &sym_entry->common);
+
+    if (Numeric == nullptr || sym_entry->common.status < KLU_OK) {
+        throw std::runtime_error("klu_z_factor failed (singular matrix?)");
+    }
+
+    return allocate_numeric_handle(Numeric, symbolic_handle);
+}
+
+// klu_solve_f64: Solve Ax=b using pre-computed factorizations
+// Input: symbolic_handle, numeric_handle, b (col-major)
+// Output: x (col-major, same shape as b)
+py::array_t<double> klu_solve_handles_f64(
+    int64_t symbolic_handle,
+    int64_t numeric_handle,
+    py::array_t<double> b) {
+    SymbolicEntry* sym_entry = get_symbolic_entry(symbolic_handle);
+    if (sym_entry == nullptr) {
+        throw std::runtime_error("Invalid symbolic handle");
+    }
+
+    NumericEntry* num_entry = get_numeric_entry(numeric_handle);
+    if (num_entry == nullptr) {
+        throw std::runtime_error("Invalid numeric handle");
+    }
+
+    auto b_buf = b.request();
+    if (b_buf.ndim != 2) {
+        throw std::runtime_error("b must be 2D (n_col, n_rhs) in column-major format");
+    }
+
+    int n_col = (int)b_buf.shape[0];
+    int n_rhs = (int)b_buf.shape[1];
+
+    if (n_col != sym_entry->n_col) {
+        throw std::runtime_error("b.shape[0] != n_col from symbolic analysis");
+    }
+
+    // Allocate output array and copy b into it (KLU solves in-place)
+    py::array_t<double> x({n_col, n_rhs});
+    auto x_buf = x.request();
+    double* _x = static_cast<double*>(x_buf.ptr);
+    const double* _b = static_cast<const double*>(b_buf.ptr);
+    std::memcpy(_x, _b, n_col * n_rhs * sizeof(double));
+
+    klu_solve(sym_entry->symbolic, num_entry->numeric, n_col, n_rhs, _x, &sym_entry->common);
+
+    if (sym_entry->common.status < KLU_OK) {
+        throw std::runtime_error("klu_solve failed");
+    }
+
+    return x;
+}
+
+// klu_solve_c128: Solve Ax=b for complex128
+py::array_t<std::complex<double>> klu_solve_handles_c128(
+    int64_t symbolic_handle,
+    int64_t numeric_handle,
+    py::array_t<std::complex<double>> b) {
+    SymbolicEntry* sym_entry = get_symbolic_entry(symbolic_handle);
+    if (sym_entry == nullptr) {
+        throw std::runtime_error("Invalid symbolic handle");
+    }
+
+    NumericEntry* num_entry = get_numeric_entry(numeric_handle);
+    if (num_entry == nullptr) {
+        throw std::runtime_error("Invalid numeric handle");
+    }
+
+    auto b_buf = b.request();
+    if (b_buf.ndim != 2) {
+        throw std::runtime_error("b must be 2D (n_col, n_rhs) in column-major format");
+    }
+
+    int n_col = (int)b_buf.shape[0];
+    int n_rhs = (int)b_buf.shape[1];
+
+    if (n_col != sym_entry->n_col) {
+        throw std::runtime_error("b.shape[0] != n_col from symbolic analysis");
+    }
+
+    // Allocate output array and copy b into it (KLU solves in-place)
+    py::array_t<std::complex<double>> x({n_col, n_rhs});
+    auto x_buf = x.request();
+    double* _x = static_cast<double*>(x_buf.ptr);
+    const double* _b = static_cast<const double*>(b_buf.ptr);
+    std::memcpy(_x, _b, 2 * n_col * n_rhs * sizeof(double));
+
+    klu_z_solve(sym_entry->symbolic, num_entry->numeric, n_col, n_rhs, _x, &sym_entry->common);
+
+    if (sym_entry->common.status < KLU_OK) {
+        throw std::runtime_error("klu_z_solve failed");
+    }
+
+    return x;
+}
+
+// Free a symbolic handle (and any associated resources)
+void klu_free_symbolic_handle(int64_t handle) {
+    if (!free_symbolic_handle(handle)) {
+        throw std::runtime_error("Invalid symbolic handle");
+    }
+}
+
+// Free a numeric handle
+void klu_free_numeric_handle(int64_t handle) {
+    if (!free_numeric_handle(handle)) {
+        throw std::runtime_error("Invalid numeric handle");
+    }
+}
+
 // Python wrappers
 PYBIND11_MODULE(klujax_cpp, m) {
     m.def("dot_f64",
@@ -729,11 +1022,35 @@ PYBIND11_MODULE(klujax_cpp, m) {
           []() { return py::capsule((void*)&solve_f64_handler); });
     m.def("solve_c128",
           []() { return py::capsule((void*)&solve_c128_handler); });
-    // Low-level functions for advanced users (split-solve API)
+    // Low-level functions for advanced users (split-solve API via FFI)
     m.def("coo_to_csc",
           []() { return py::capsule((void*)&coo_to_csc_handler); });
     m.def("solve_csc_f64",
           []() { return py::capsule((void*)&solve_csc_f64_handler); });
     m.def("solve_csc_c128",
           []() { return py::capsule((void*)&solve_csc_c128_handler); });
+
+    // True split-solve API: separate klu_analyze, klu_factor, klu_solve
+    // These allow reusing symbolic analysis across multiple solves (for Newton-Raphson, etc.)
+    m.def("klu_analyze", &klu_analyze_csc,
+          "Perform symbolic analysis on CSC sparsity pattern. Returns a handle.",
+          py::arg("Bp"), py::arg("Bi"));
+    m.def("klu_factor_f64", &klu_factor_csc_f64,
+          "Perform numeric factorization (f64). Returns a handle.",
+          py::arg("symbolic_handle"), py::arg("Bp"), py::arg("Bi"), py::arg("Bx"));
+    m.def("klu_factor_c128", &klu_factor_csc_c128,
+          "Perform numeric factorization (c128). Returns a handle.",
+          py::arg("symbolic_handle"), py::arg("Bp"), py::arg("Bi"), py::arg("Bx"));
+    m.def("klu_solve_f64", &klu_solve_handles_f64,
+          "Solve Ax=b using pre-computed factorizations (f64). b must be column-major (n_col, n_rhs).",
+          py::arg("symbolic_handle"), py::arg("numeric_handle"), py::arg("b"));
+    m.def("klu_solve_c128", &klu_solve_handles_c128,
+          "Solve Ax=b using pre-computed factorizations (c128). b must be column-major (n_col, n_rhs).",
+          py::arg("symbolic_handle"), py::arg("numeric_handle"), py::arg("b"));
+    m.def("klu_free_symbolic", &klu_free_symbolic_handle,
+          "Free a symbolic factorization handle.",
+          py::arg("handle"));
+    m.def("klu_free_numeric", &klu_free_numeric_handle,
+          "Free a numeric factorization handle.",
+          py::arg("handle"));
 }
