@@ -442,6 +442,283 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(  // b = A x
         .Ret<ffi::Buffer<ffi::DataType::C128>>()  // x
 );
 
+// =============================================================================
+// Low-level functions for advanced users (split-solve API)
+// =============================================================================
+
+// COO to CSC conversion: returns Bp (column pointers), Bi (row indices), Bk (value mapping)
+// Input: Ai (n_nz,), Aj (n_nz,), n_col (scalar via attribute)
+// Output: Bp (n_col+1,), Bi (n_nz,), Bk (n_nz,)
+ffi::Error coo_to_csc(
+    const ffi::Buffer<ffi::DataType::S32> Ai,
+    const ffi::Buffer<ffi::DataType::S32> Aj,
+    ffi::Buffer<ffi::DataType::S32> n_col_buf,
+    ffi::Result<ffi::Buffer<ffi::DataType::S32>> Bp,
+    ffi::Result<ffi::Buffer<ffi::DataType::S32>> Bi,
+    ffi::Result<ffi::Buffer<ffi::DataType::S32>> Bk) {
+    auto ds_Ai = Ai.dimensions();
+    auto ds_Aj = Aj.dimensions();
+
+    if (ds_Ai.size() != 1 || ds_Aj.size() != 1) {
+        return ffi::Error::InvalidArgument("Ai and Aj must be 1D");
+    }
+
+    int n_nz = (int)ds_Ai[0];
+    if (n_nz != (int)ds_Aj[0]) {
+        return ffi::Error::InvalidArgument("Ai and Aj must have same length");
+    }
+
+    int n_col = n_col_buf.typed_data()[0];
+
+    const int* _Ai = Ai.typed_data();
+    const int* _Aj = Aj.typed_data();
+    int* _Bp = Bp->typed_data();
+    int* _Bi = Bi->typed_data();
+    int* _Bk = Bk->typed_data();
+
+    // Initialize Bp to zero
+    for (int i = 0; i <= n_col; i++) {
+        _Bp[i] = 0;
+    }
+
+    coo_to_csc_analyze(n_col, n_nz, _Ai, _Aj, _Bi, _Bp, _Bk);
+
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    coo_to_csc_handler, coo_to_csc,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Ai
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Aj
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // n_col (as 1-element buffer)
+        .Ret<ffi::Buffer<ffi::DataType::S32>>()  // Bp
+        .Ret<ffi::Buffer<ffi::DataType::S32>>()  // Bi
+        .Ret<ffi::Buffer<ffi::DataType::S32>>()  // Bk
+);
+
+// Solve using pre-computed CSC structure (f64)
+// This skips the COO->CSC conversion step
+ffi::Error solve_csc_f64(
+    ffi::Buffer<ffi::DataType::S32> Bp,
+    ffi::Buffer<ffi::DataType::S32> Bi,
+    ffi::Buffer<ffi::DataType::S32> Bk,
+    ffi::Buffer<ffi::DataType::F64> Ax,
+    ffi::Buffer<ffi::DataType::F64> b,
+    ffi::Result<ffi::Buffer<ffi::DataType::F64>> x) {
+    auto ds_b = b.dimensions();
+    auto ds_Ax = Ax.dimensions();
+    auto ds_Bp = Bp.dimensions();
+    auto ds_Bk = Bk.dimensions();
+
+    if (ds_b.size() != 3) {
+        return ffi::Error::InvalidArgument("b must be 3D (n_lhs, n_col, n_rhs)");
+    }
+    if (ds_Ax.size() != 2) {
+        return ffi::Error::InvalidArgument("Ax must be 2D (n_lhs, n_nz)");
+    }
+
+    int n_lhs = (int)ds_b[0];
+    int n_col = (int)ds_b[1];
+    int n_rhs = (int)ds_b[2];
+    int n_nz = (int)ds_Ax[1];
+
+    if ((int)ds_Ax[0] != n_lhs) {
+        return ffi::Error::InvalidArgument("Ax.shape[0] != b.shape[0]");
+    }
+    if ((int)ds_Bp[0] != n_col + 1) {
+        return ffi::Error::InvalidArgument("Bp.shape[0] != n_col + 1");
+    }
+    if ((int)ds_Bk[0] != n_nz) {
+        return ffi::Error::InvalidArgument("Bk.shape[0] != n_nz");
+    }
+
+    const int* _Bp = Bp.typed_data();
+    const int* _Bi = Bi.typed_data();
+    const int* _Bk = Bk.typed_data();
+    const double* _Ax = Ax.typed_data();
+    const double* _b = b.typed_data();
+    double* _x = x->typed_data();
+
+    auto _Bx = std::make_unique<double[]>(n_nz);
+
+    // copy _b into _x_temp and transpose for KLU (col-major)
+    auto _x_temp = std::make_unique<double[]>(n_lhs * n_col * n_rhs);
+    for (int m = 0; m < n_lhs; m++) {
+        for (int n = 0; n < n_col; n++) {
+            for (int p = 0; p < n_rhs; p++) {
+                _x_temp[m * n_rhs * n_col + p * n_col + n] = _b[m * n_col * n_rhs + n * n_rhs + p];
+            }
+        }
+    }
+
+    // initialize KLU for given sparsity pattern
+    klu_symbolic* Symbolic;
+    klu_numeric* Numeric;
+    klu_common Common;
+    klu_defaults(&Common);
+    Symbolic = klu_analyze(n_col, const_cast<int*>(_Bp), const_cast<int*>(_Bi), &Common);
+
+    // solve for all elements in batch
+    for (int i = 0; i < n_lhs; i++) {
+        int m = i * n_nz;
+        int n = i * n_rhs * n_col;
+
+        // convert COO Ax to CSC Bx using pre-computed mapping
+        for (int k = 0; k < n_nz; k++) {
+            _Bx[k] = _Ax[m + _Bk[k]];
+        }
+
+        Numeric = klu_factor(const_cast<int*>(_Bp), const_cast<int*>(_Bi), _Bx.get(), Symbolic, &Common);
+        if (Numeric == nullptr || Common.status < KLU_OK) {
+            klu_free_symbolic(&Symbolic, &Common);
+            return ffi::Error::InvalidArgument("klu_factor failed (singular matrix?)");
+        }
+        klu_solve(Symbolic, Numeric, n_col, n_rhs, &_x_temp[n], &Common);
+        if (Common.status < KLU_OK) {
+            klu_free_numeric(&Numeric, &Common);
+            klu_free_symbolic(&Symbolic, &Common);
+            return ffi::Error::InvalidArgument("klu_solve failed");
+        }
+        klu_free_numeric(&Numeric, &Common);
+    }
+
+    // copy _x_temp into _x and transpose back (row-major)
+    for (int m = 0; m < n_lhs; m++) {
+        for (int n = 0; n < n_col; n++) {
+            for (int p = 0; p < n_rhs; p++) {
+                _x[m * n_col * n_rhs + n * n_rhs + p] = _x_temp[m * n_rhs * n_col + p * n_col + n];
+            }
+        }
+    }
+
+    klu_free_symbolic(&Symbolic, &Common);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    solve_csc_f64_handler, solve_csc_f64,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Bp
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Bi
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Bk
+        .Arg<ffi::Buffer<ffi::DataType::F64>>()  // Ax
+        .Arg<ffi::Buffer<ffi::DataType::F64>>()  // b
+        .Ret<ffi::Buffer<ffi::DataType::F64>>()  // x
+);
+
+// Solve using pre-computed CSC structure (c128)
+ffi::Error solve_csc_c128(
+    ffi::Buffer<ffi::DataType::S32> Bp,
+    ffi::Buffer<ffi::DataType::S32> Bi,
+    ffi::Buffer<ffi::DataType::S32> Bk,
+    ffi::Buffer<ffi::DataType::C128> Ax,
+    ffi::Buffer<ffi::DataType::C128> b,
+    ffi::Result<ffi::Buffer<ffi::DataType::C128>> x) {
+    auto ds_b = b.dimensions();
+    auto ds_Ax = Ax.dimensions();
+    auto ds_Bp = Bp.dimensions();
+    auto ds_Bk = Bk.dimensions();
+
+    if (ds_b.size() != 3) {
+        return ffi::Error::InvalidArgument("b must be 3D (n_lhs, n_col, n_rhs)");
+    }
+    if (ds_Ax.size() != 2) {
+        return ffi::Error::InvalidArgument("Ax must be 2D (n_lhs, n_nz)");
+    }
+
+    int n_lhs = (int)ds_b[0];
+    int n_col = (int)ds_b[1];
+    int n_rhs = (int)ds_b[2];
+    int n_nz = (int)ds_Ax[1];
+
+    if ((int)ds_Ax[0] != n_lhs) {
+        return ffi::Error::InvalidArgument("Ax.shape[0] != b.shape[0]");
+    }
+    if ((int)ds_Bp[0] != n_col + 1) {
+        return ffi::Error::InvalidArgument("Bp.shape[0] != n_col + 1");
+    }
+    if ((int)ds_Bk[0] != n_nz) {
+        return ffi::Error::InvalidArgument("Bk.shape[0] != n_nz");
+    }
+
+    const int* _Bp = Bp.typed_data();
+    const int* _Bi = Bi.typed_data();
+    const int* _Bk = Bk.typed_data();
+    const double* _Ax = (double*)Ax.typed_data();
+    const double* _b = (double*)b.typed_data();
+    double* _x = (double*)x->typed_data();
+
+    auto _Bx = std::make_unique<double[]>(2 * n_nz);
+
+    // copy _b into _x_temp and transpose for KLU (col-major)
+    auto _x_temp = std::make_unique<double[]>(2 * n_lhs * n_col * n_rhs);
+    for (int m = 0; m < n_lhs; m++) {
+        for (int n = 0; n < n_col; n++) {
+            for (int p = 0; p < n_rhs; p++) {
+                _x_temp[2 * (m * n_rhs * n_col + p * n_col + n)] = _b[2 * (m * n_col * n_rhs + n * n_rhs + p)];
+                _x_temp[2 * (m * n_rhs * n_col + p * n_col + n) + 1] = _b[2 * (m * n_col * n_rhs + n * n_rhs + p) + 1];
+            }
+        }
+    }
+
+    // initialize KLU for given sparsity pattern
+    klu_symbolic* Symbolic;
+    klu_numeric* Numeric;
+    klu_common Common;
+    klu_defaults(&Common);
+    Symbolic = klu_analyze(n_col, const_cast<int*>(_Bp), const_cast<int*>(_Bi), &Common);
+
+    // solve for all elements in batch
+    for (int i = 0; i < n_lhs; i++) {
+        int m = i * n_nz;
+        int n = i * n_rhs * n_col;
+
+        // convert COO Ax to CSC Bx using pre-computed mapping
+        for (int k = 0; k < n_nz; k++) {
+            _Bx[2 * k] = _Ax[2 * (m + _Bk[k])];
+            _Bx[2 * k + 1] = _Ax[2 * (m + _Bk[k]) + 1];
+        }
+
+        Numeric = klu_z_factor(const_cast<int*>(_Bp), const_cast<int*>(_Bi), _Bx.get(), Symbolic, &Common);
+        if (Numeric == nullptr || Common.status < KLU_OK) {
+            klu_free_symbolic(&Symbolic, &Common);
+            return ffi::Error::InvalidArgument("klu_z_factor failed (singular matrix?)");
+        }
+        klu_z_solve(Symbolic, Numeric, n_col, n_rhs, &_x_temp[2 * n], &Common);
+        if (Common.status < KLU_OK) {
+            klu_free_numeric(&Numeric, &Common);
+            klu_free_symbolic(&Symbolic, &Common);
+            return ffi::Error::InvalidArgument("klu_z_solve failed");
+        }
+        klu_free_numeric(&Numeric, &Common);
+    }
+
+    // copy _x_temp into _x and transpose back (row-major)
+    for (int m = 0; m < n_lhs; m++) {
+        for (int n = 0; n < n_col; n++) {
+            for (int p = 0; p < n_rhs; p++) {
+                _x[2 * (m * n_col * n_rhs + n * n_rhs + p)] = _x_temp[2 * (m * n_rhs * n_col + p * n_col + n)];
+                _x[2 * (m * n_col * n_rhs + n * n_rhs + p) + 1] = _x_temp[2 * (m * n_rhs * n_col + p * n_col + n) + 1];
+            }
+        }
+    }
+
+    klu_free_symbolic(&Symbolic, &Common);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    solve_csc_c128_handler, solve_csc_c128,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()   // Bp
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()   // Bi
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()   // Bk
+        .Arg<ffi::Buffer<ffi::DataType::C128>>()  // Ax
+        .Arg<ffi::Buffer<ffi::DataType::C128>>()  // b
+        .Ret<ffi::Buffer<ffi::DataType::C128>>()  // x
+);
+
 // Python wrappers
 PYBIND11_MODULE(klujax_cpp, m) {
     m.def("dot_f64",
@@ -452,4 +729,11 @@ PYBIND11_MODULE(klujax_cpp, m) {
           []() { return py::capsule((void*)&solve_f64_handler); });
     m.def("solve_c128",
           []() { return py::capsule((void*)&solve_c128_handler); });
+    // Low-level functions for advanced users (split-solve API)
+    m.def("coo_to_csc",
+          []() { return py::capsule((void*)&coo_to_csc_handler); });
+    m.def("solve_csc_f64",
+          []() { return py::capsule((void*)&solve_csc_f64_handler); });
+    m.def("solve_csc_c128",
+          []() { return py::capsule((void*)&solve_csc_c128_handler); });
 }
