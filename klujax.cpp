@@ -152,12 +152,13 @@ ffi::Error dot_f64(
     // fill result (all multi-dim arrays are row-major)
     // x_mik = A_mij × x_mjk (einsum)
     // sizes: m<n_lhs; i<n_col<--Ai; j<n_col<--Aj; k<n_rhs
+    // Loop order: m (batch) outer for better cache locality on Ax
     int i;
     int j;
-    for (int n = 0; n < n_nz; n++) {
-        i = _Ai[n];
-        j = _Aj[n];
-        for (int m = 0; m < n_lhs; m++) {
+    for (int m = 0; m < n_lhs; m++) {
+        for (int n = 0; n < n_nz; n++) {
+            i = _Ai[n];
+            j = _Aj[n];
             for (int k = 0; k < n_rhs; k++) {
                 _b[m * n_col * n_rhs + i * n_rhs + k] += _Ax[m * n_nz + n] * _x[m * n_col * n_rhs + j * n_rhs + k];
             }
@@ -206,12 +207,13 @@ ffi::Error dot_c128(
     // fill result (all multi-dim arrays are row-major)
     // x_mik = A_mij × x_mjk (einsum)
     // sizes: m<n_lhs; i<n_col<--Ai; j<n_col<--Aj; k<n_rhs
+    // Loop order: m (batch) outer for better cache locality on Ax
     int i;
     int j;
-    for (int n = 0; n < n_nz; n++) {
-        i = _Ai[n];
-        j = _Aj[n];
-        for (int m = 0; m < n_lhs; m++) {
+    for (int m = 0; m < n_lhs; m++) {
+        for (int n = 0; n < n_nz; n++) {
+            i = _Ai[n];
+            j = _Aj[n];
             for (int k = 0; k < n_rhs; k++) {
                 _b[2 * (m * n_col * n_rhs + i * n_rhs + k)] +=                                        // real
                     _Ax[2 * (m * n_nz + n)] * _x[2 * (m * n_col * n_rhs + j * n_rhs + k)]             // real*real
