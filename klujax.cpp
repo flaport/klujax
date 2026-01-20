@@ -12,8 +12,8 @@ namespace ffi = xla::ffi;
 #include <cstring>  // for memset
 
 ffi::Error validate_dot_f64_args(
-    const ffi::Buffer<ffi::DataType::S32> &Ai,
-    const ffi::Buffer<ffi::DataType::S32> &Aj,
+    const ffi::Buffer<ffi::DataType::S32>& Ai,
+    const ffi::Buffer<ffi::DataType::S32>& Aj,
     const ffi::AnyBuffer::Dimensions ds_Ax,
     const ffi::AnyBuffer::Dimensions ds_x) {
     int d_x = ds_x.size();
@@ -59,8 +59,8 @@ ffi::Error validate_dot_f64_args(
 
     int i;
     int j;
-    const int *_Ai = Ai.typed_data();
-    const int *_Aj = Aj.typed_data();
+    const int* _Ai = Ai.typed_data();
+    const int* _Aj = Aj.typed_data();
     for (int n = 0; n < n_nz; n++) {
         i = _Ai[n];
         if (i < 0) {
@@ -83,11 +83,11 @@ ffi::Error validate_dot_f64_args(
 void coo_to_csc_analyze(
     const int n_col,
     const int n_nz,
-    const int *Ai,
-    const int *Aj,
-    int *Bi,
-    int *Bp,
-    int *Bk) {
+    const int* Ai,
+    const int* Aj,
+    int* Bi,
+    int* Bp,
+    int* Bk) {
     // compute number of non-zero entries per row of A
     for (int n = 0; n < n_nz; n++) {
         Bp[Aj[n]] += 1;
@@ -138,11 +138,11 @@ ffi::Error dot_f64(
     int n_col = (int)ds_x[1];
     int n_rhs = (int)ds_x[2];
     int n_nz = (int)ds_Ax[1];
-    const int *_Ai = Ai.typed_data();
-    const int *_Aj = Aj.typed_data();
-    const double *_Ax = Ax.typed_data();
-    const double *_x = x.typed_data();
-    double *_b = b->typed_data();
+    const int* _Ai = Ai.typed_data();
+    const int* _Aj = Aj.typed_data();
+    const double* _Ax = Ax.typed_data();
+    const double* _x = x.typed_data();
+    double* _b = b->typed_data();
 
     // initialize empty result
     for (int i = 0; i < n_lhs * n_col * n_rhs; i++) {
@@ -192,11 +192,11 @@ ffi::Error dot_c128(
     int n_col = (int)ds_x[1];
     int n_rhs = (int)ds_x[2];
     int n_nz = (int)ds_Ax[1];
-    const int *_Ai = Ai.typed_data();
-    const int *_Aj = Aj.typed_data();
-    const double *_Ax = (double *)Ax.typed_data();
-    const double *_x = (double *)x.typed_data();
-    double *_b = (double *)b->typed_data();
+    const int* _Ai = Ai.typed_data();
+    const int* _Aj = Aj.typed_data();
+    const double* _Ax = (double*)Ax.typed_data();
+    const double* _x = (double*)x.typed_data();
+    double* _b = (double*)b->typed_data();
 
     // initialize empty result
     for (int i = 0; i < 2 * n_lhs * n_col * n_rhs; i++) {
@@ -253,23 +253,23 @@ ffi::Error solve_f64(
     int n_col = (int)ds_b[1];
     int n_rhs = (int)ds_b[2];
     int n_nz = (int)ds_Ax[1];
-    const int *_Ai = Ai.typed_data();
-    const int *_Aj = Aj.typed_data();
-    const double *_Ax = Ax.typed_data();
-    const double *_b = b.typed_data();
-    double *_x = x->typed_data();
+    const int* _Ai = Ai.typed_data();
+    const int* _Aj = Aj.typed_data();
+    const double* _Ax = Ax.typed_data();
+    const double* _b = b.typed_data();
+    double* _x = x->typed_data();
 
     // get COO -> CSC transformation information
-    int *_Bk = new int[n_nz]();  // Ax -> Bx transformation indices
-    int *_Bi = new int[n_nz]();
-    int *_Bp = new int[n_col + 1]();
-    double *_Bx = new double[n_nz]();
+    int* _Bk = new int[n_nz]();  // Ax -> Bx transformation indices
+    int* _Bi = new int[n_nz]();
+    int* _Bp = new int[n_col + 1]();
+    double* _Bx = new double[n_nz]();
 
     coo_to_csc_analyze(n_col, n_nz, _Ai, _Aj, _Bi, _Bp, _Bk);
 
     // copy _b into _x_temp and transpose the last two dimensions since KLU expects col-major layout
     // _b itself won't be used anymore. KLU works on _x_temp in-place.
-    double *_x_temp = new double[n_lhs * n_col * n_rhs]();
+    double* _x_temp = new double[n_lhs * n_col * n_rhs]();
     for (int m = 0; m < n_lhs; m++) {
         for (int n = 0; n < n_col; n++) {
             for (int p = 0; p < n_rhs; p++) {
@@ -279,8 +279,8 @@ ffi::Error solve_f64(
     }
 
     // initialize KLU for given sparsity pattern
-    klu_symbolic *Symbolic;
-    klu_numeric *Numeric;
+    klu_symbolic* Symbolic;
+    klu_numeric* Numeric;
     klu_common Common;
     klu_defaults(&Common);
     Symbolic = klu_analyze(n_col, _Bp, _Bi, &Common);
@@ -361,22 +361,22 @@ ffi::Error solve_c128(
     int n_col = (int)ds_x[1];
     int n_rhs = (int)ds_x[2];
     int n_nz = (int)ds_Ax[1];
-    const int *_Ai = Ai.typed_data();
-    const int *_Aj = Aj.typed_data();
-    const double *_Ax = (double *)Ax.typed_data();
-    const double *_b = (double *)b.typed_data();
-    double *_x = (double *)x->typed_data();
+    const int* _Ai = Ai.typed_data();
+    const int* _Aj = Aj.typed_data();
+    const double* _Ax = (double*)Ax.typed_data();
+    const double* _b = (double*)b.typed_data();
+    double* _x = (double*)x->typed_data();
 
     // get COO -> CSC transformation information
-    int *_Bk = new int[n_nz]();       // Ax -> Bx transformation indices
-    int *_Bi = new int[n_nz]();       // CSC row indices
-    int *_Bp = new int[n_col + 1]();  // CSC column pointers
-    double *_Bx = new double[2 * n_nz]();
+    int* _Bk = new int[n_nz]();       // Ax -> Bx transformation indices
+    int* _Bi = new int[n_nz]();       // CSC row indices
+    int* _Bp = new int[n_col + 1]();  // CSC column pointers
+    double* _Bx = new double[2 * n_nz]();
     coo_to_csc_analyze(n_col, n_nz, _Ai, _Aj, _Bi, _Bp, _Bk);
 
     // copy _b into _x_temp and transpose the last two dimensions since KLU expects col-major layout
     // _b itself won't be used anymore. KLU works on _x_temp in-place.
-    double *_x_temp = new double[2 * n_lhs * n_col * n_rhs]();
+    double* _x_temp = new double[2 * n_lhs * n_col * n_rhs]();
     for (int m = 0; m < n_lhs; m++) {
         for (int n = 0; n < n_col; n++) {
             for (int p = 0; p < n_rhs; p++) {
@@ -387,8 +387,8 @@ ffi::Error solve_c128(
     }
 
     // initialize KLU for given sparsity pattern
-    klu_symbolic *Symbolic;
-    klu_numeric *Numeric;
+    klu_symbolic* Symbolic;
+    klu_numeric* Numeric;
     klu_common Common;
     klu_defaults(&Common);
     Symbolic = klu_analyze(n_col, _Bp, _Bi, &Common);
@@ -458,11 +458,11 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(  // b = A x
 // Python wrappers
 PYBIND11_MODULE(klujax_cpp, m) {
     m.def("dot_f64",
-          []() { return py::capsule((void *)&dot_f64_handler); });
+          []() { return py::capsule((void*)&dot_f64_handler); });
     m.def("dot_c128",
-          []() { return py::capsule((void *)&dot_c128_handler); });
+          []() { return py::capsule((void*)&dot_c128_handler); });
     m.def("solve_f64",
-          []() { return py::capsule((void *)&solve_f64_handler); });
+          []() { return py::capsule((void*)&solve_f64_handler); });
     m.def("solve_c128",
-          []() { return py::capsule((void *)&solve_c128_handler); });
+          []() { return py::capsule((void*)&solve_c128_handler); });
 }
