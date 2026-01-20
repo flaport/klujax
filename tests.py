@@ -35,7 +35,7 @@ def parametrize_dtypes(func):
 
 
 def parametrize_ops(func):
-    return pytest.mark.parametrize("op_sparse", [klujax.solve])(func)
+    return pytest.mark.parametrize("op_sparse", [klujax.solve, klujax.dot])(func)
 
 
 @log_test_name
@@ -174,6 +174,12 @@ def _get_rand_arrs_1d(n_nz, n_col, *, dtype, seed=33):
     Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
     Aj = jax.random.randint(Ajkey, (n_nz,), 0, n_col, jnp.int32)
     Ax = jax.random.normal(Axkey, (n_nz,), dtype=dtype)
+    # Add diagonal to ensure matrix is invertible
+    diag_i = jnp.arange(n_col, dtype=jnp.int32)
+    diag_x = jnp.ones(n_col, dtype=dtype) * 10.0
+    Ai = jnp.concatenate([Ai, diag_i])
+    Aj = jnp.concatenate([Aj, diag_i])
+    Ax = jnp.concatenate([Ax, diag_x])
     Ai, Aj, Ax = coalesce(Ai, Aj, Ax)
     b = jax.random.normal(bkey, (n_col,), dtype=dtype)
     return Ai, Aj, Ax, b
@@ -191,6 +197,12 @@ def _get_rand_arrs_2d(n_lhs, n_nz, n_col, *, dtype, seed=33):
         ),
         dtype=dtype,
     )
+    # Add diagonal to ensure matrix is invertible
+    diag_i = jnp.arange(n_col, dtype=jnp.int32)
+    diag_x = jnp.ones((n_lhs, n_col), dtype=dtype) * 10.0
+    Ai = jnp.concatenate([Ai, diag_i])
+    Aj = jnp.concatenate([Aj, diag_i])
+    Ax = jnp.concatenate([Ax, diag_x], axis=1)
     Ai, Aj, Ax = coalesce(Ai, Aj, Ax)
     b = jax.random.normal(bkey, (n_lhs, n_col), dtype=dtype)
     return Ai, Aj, Ax, b
@@ -208,6 +220,12 @@ def _get_rand_arrs_3d(n_lhs, n_nz, n_col, n_rhs, *, dtype, seed=33):
         ),
         dtype=dtype,
     )
+    # Add diagonal to ensure matrix is invertible
+    diag_i = jnp.arange(n_col, dtype=jnp.int32)
+    diag_x = jnp.ones((n_lhs, n_col), dtype=dtype) * 10.0
+    Ai = jnp.concatenate([Ai, diag_i])
+    Aj = jnp.concatenate([Aj, diag_i])
+    Ax = jnp.concatenate([Ax, diag_x], axis=1)
     Ai, Aj, Ax = coalesce(Ai, Aj, Ax)
     b = jax.random.normal(bkey, (n_lhs, n_col, n_rhs), dtype=dtype)
     return Ai, Aj, Ax, b
