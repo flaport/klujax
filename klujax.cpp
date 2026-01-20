@@ -301,11 +301,16 @@ ffi::Error solve_f64(
 
         // solve using KLU
         Numeric = klu_factor(_Bp.get(), _Bi.get(), _Bx.get(), Symbolic, &Common);
-        if (Numeric == nullptr) {
+        if (Numeric == nullptr || Common.status < KLU_OK) {
             klu_free_symbolic(&Symbolic, &Common);
             return ffi::Error::InvalidArgument("klu_factor failed (singular matrix?)");
         }
         klu_solve(Symbolic, Numeric, n_col, n_rhs, &_x_temp[n], &Common);
+        if (Common.status < KLU_OK) {
+            klu_free_numeric(&Numeric, &Common);
+            klu_free_symbolic(&Symbolic, &Common);
+            return ffi::Error::InvalidArgument("klu_solve failed");
+        }
         klu_free_numeric(&Numeric, &Common);
     }
 
@@ -397,11 +402,16 @@ ffi::Error solve_c128(
 
         // solve using KLU
         Numeric = klu_z_factor(_Bp.get(), _Bi.get(), _Bx.get(), Symbolic, &Common);
-        if (Numeric == nullptr) {
+        if (Numeric == nullptr || Common.status < KLU_OK) {
             klu_free_symbolic(&Symbolic, &Common);
             return ffi::Error::InvalidArgument("klu_z_factor failed (singular matrix?)");
         }
         klu_z_solve(Symbolic, Numeric, n_col, n_rhs, &_x_temp[2 * n], &Common);
+        if (Common.status < KLU_OK) {
+            klu_free_numeric(&Numeric, &Common);
+            klu_free_symbolic(&Symbolic, &Common);
+            return ffi::Error::InvalidArgument("klu_z_solve failed");
+        }
         klu_free_numeric(&Numeric, &Common);
     }
 

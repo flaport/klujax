@@ -113,10 +113,10 @@ def dot(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
 
 
 def coalesce(
-    Ai: jax.Array,
-    Aj: jax.Array,
-    Ax: jax.Array,
-) -> tuple[jax.Array, jax.Array, jax.Array]:
+    Ai: Array,
+    Aj: Array,
+    Ax: Array,
+) -> tuple[Array, Array, Array]:
     """Coalesce a sparse matrix by summing duplicate indices.
 
     Args:
@@ -502,8 +502,7 @@ def dot_transpose(
         return Aj, Ai, Ax, prim.bind(Aj, Ai, Ax, ct)
 
     if ad.is_undefined_primal(Ax):
-        # replace Ax by ct
-        # not really sure what I'm doing here, but this makes test_3d_jacrev pass.
+        # ∂L/∂Ax[m,n] = Σₖ ct[m, Ai[n], k] · x[m, Aj[n], k]
         return Ai, Aj, (ct[:, Ai] * x[:, Aj, :]).sum(-1), x
 
     msg = "No undefined primals in transpose."
