@@ -2,7 +2,7 @@ name: main
 on:
   push:
     tags:
-      - '[0-9]*.[0-9]*.[0-9]*'
+      - "[0-9]*.[0-9]*.[0-9]*"
     branches:
       - main
   pull_request:
@@ -16,13 +16,13 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            cibw_archs: 'native'
+            cibw_archs: "native"
           - os: ubuntu-latest
-            cibw_archs: 'aarch64'
+            cibw_archs: "aarch64"
           - os: windows-latest
-            cibw_archs: 'native ARM64'
+            cibw_archs: "native ARM64"
           - os: macos-latest
-            cibw_archs: 'native'
+            cibw_archs: "native"
 
     steps:
       - name: Set up QEMU

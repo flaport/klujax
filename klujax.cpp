@@ -43,7 +43,7 @@ ffi::Error validate_dot_f64_args(
     int n_nz_bis = (int)ds_Ai[0];
     if (n_nz != n_nz_bis) {
         return ffi::Error::InvalidArgument(
-            "n_lhs mismatch: Ai.shape[0] != Ax.shape[1]: Got " + std::to_string(n_nz_bis) + " != " + std::to_string(n_nz));
+            "n_nz mismatch: Ai.shape[0] != Ax.shape[1]: Got " + std::to_string(n_nz_bis) + " != " + std::to_string(n_nz));
     }
 
     auto ds_Aj = Aj.dimensions();
@@ -54,7 +54,7 @@ ffi::Error validate_dot_f64_args(
     n_nz_bis = (int)ds_Aj[0];
     if (n_nz != n_nz_bis) {
         return ffi::Error::InvalidArgument(
-            "n_lhs mismatch: Aj.shape[0] != Ax.shape[1]: Got " + std::to_string(n_nz_bis) + " != " + std::to_string(n_nz));
+            "n_nz mismatch: Aj.shape[0] != Ax.shape[1]: Got " + std::to_string(n_nz_bis) + " != " + std::to_string(n_nz));
     }
 
     int i;
@@ -63,10 +63,16 @@ ffi::Error validate_dot_f64_args(
     const int *_Aj = Aj.typed_data();
     for (int n = 0; n < n_nz; n++) {
         i = _Ai[n];
+        if (i < 0) {
+            return ffi::Error::InvalidArgument("Ai contains negative index");
+        }
         if (i >= n_col) {
             return ffi::Error::InvalidArgument("Ai.max() >= n_col");
         }
         j = _Aj[n];
+        if (j < 0) {
+            return ffi::Error::InvalidArgument("Aj contains negative index");
+        }
         if (j >= n_col) {
             return ffi::Error::InvalidArgument("Aj.max() >= n_col");
         }
@@ -292,8 +298,18 @@ ffi::Error solve_f64(
 
         // solve using KLU
         Numeric = klu_factor(_Bp, _Bi, _Bx, Symbolic, &Common);
+        if (Numeric == nullptr) {
+            // Clean up on error
+            klu_free_symbolic(&Symbolic, &Common);
+            delete[] _Bk;
+            delete[] _Bi;
+            delete[] _Bp;
+            delete[] _Bx;
+            delete[] _x_temp;
+            return ffi::Error::InvalidArgument("klu_factor failed (singular matrix?)");
+        }
         klu_solve(Symbolic, Numeric, n_col, n_rhs, &_x_temp[n], &Common);
-        klu_free_numeric(&Numeric, &Common); // Free Numeric after each iteration
+        klu_free_numeric(&Numeric, &Common);
     }
 
     // copy _x_temp into _x and transpose the last two dimensions since JAX expects row-major layout
@@ -391,8 +407,18 @@ ffi::Error solve_c128(
 
         // solve using KLU
         Numeric = klu_z_factor(_Bp, _Bi, _Bx, Symbolic, &Common);
+        if (Numeric == nullptr) {
+            // Clean up on error
+            klu_free_symbolic(&Symbolic, &Common);
+            delete[] _Bk;
+            delete[] _Bi;
+            delete[] _Bp;
+            delete[] _Bx;
+            delete[] _x_temp;
+            return ffi::Error::InvalidArgument("klu_z_factor failed (singular matrix?)");
+        }
         klu_z_solve(Symbolic, Numeric, n_col, n_rhs, &_x_temp[2 * n], &Common);
-        klu_free_numeric(&Numeric, &Common); // Free Numeric after each iteration
+        klu_free_numeric(&Numeric, &Common);
     }
 
     // copy _x_temp into _x and transpose the last two dimensions since JAX expects row-major layout

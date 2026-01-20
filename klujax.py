@@ -588,7 +588,7 @@ def validate_args(  # noqa: C901,PLR0912
     elif Ax.ndim == 2 and x.ndim == 1:  # expand dims to base case
         debug(
             f"assuming (n_lhs:={Ax.shape[0]}, n_nz:={Ax.shape[1]}) x "
-            f"(n_col:={x.shape[1]},)"
+            f"(n_col:={x.shape[0]},)"
         )
         x = x[None, :, None]
         shape = (Ax.shape[0], shape[0])  # we need to expand the shape here.
