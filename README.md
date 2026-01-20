@@ -18,6 +18,8 @@ Note that `float32`/`complex64` arrays will be cast to `float64`/`complex128`!
 The `klujax` library provides a single function `solve(Ai, Aj, Ax, b)`, which solves for `x` in
 the sparse linear system `Ax=b`, where `A` is explicitly given in COO-format (`Ai`, `Aj`, `Ax`).
 
+The function is JIT-compilable and supports JAX autograd (`jax.grad`, `jax.jacfwd`, `jax.jacrev`).
+
 > NOTE: the sparse matrix represented by (`Ai`, `Aj`, `Ax`) needs to be [coalesced](https://pytorch.org/docs/stable/sparse.html#uncoalesced-sparse-coo-tensors)!
 > KLUJAX provides a `coalesce` function (which unfortunately is not jax-jittable).
 
@@ -95,7 +97,7 @@ most platforms as follows:
 pip install klujax
 ```
 
-**There exist pre-built wheels for Linux and Windows (python 3.8+).** If no compatible
+**There exist pre-built wheels for Linux and Windows (Python 3.11+).** If no compatible
 wheel is found, however, pip will attempt to install the library from source... make
 sure you have the necessary build dependencies installed (see [Installing from Source](#installing-from-source))
 
@@ -107,9 +109,9 @@ sure you have the necessary build dependencies installed (see [Installing from S
 Before installing, clone the build dependencies:
 
 ```sh
-git clone --depth 1 --branch v7.2.0 https://github.com/DrTimothyAldenDavis/SuiteSparse suitesparse
-git clone --depth 1 --branch main https://github.com/openxla/xla xla
-git clone --depth 1 --branch stable https://github.com/pybind/pybind11 pybind11
+git clone --depth 1 --branch v7.5.0 https://github.com/DrTimothyAldenDavis/SuiteSparse suitesparse
+git clone https://github.com/openxla/xla xla && cd xla && git checkout 05f004e8368c955b872126b1c978c60e33bbc5c8 && cd ..
+git clone --depth 1 --branch v2.13.6 https://github.com/pybind/pybind11 pybind11
 ```
 
 ### Linux
@@ -154,7 +156,7 @@ pip install .
 
 ## License & Credits
 
-© Floris Laporte 2022, LGPL-2.1
+© Floris Laporte 2022-2026, LGPL-2.1
 
 This library was partly based on:
 
