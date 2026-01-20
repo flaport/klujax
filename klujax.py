@@ -296,9 +296,10 @@ def solve_value_and_jvp(
 ) -> tuple[Array, Array]:
     Ai, Aj, Ax, b = arg_values
     dAi, dAj, dAx, db = arg_tangents
+    if not isinstance(dAi, ad.Zero) or not isinstance(dAj, ad.Zero):
+        msg = "Sparse indices Ai and Aj should not require gradients."
+        raise ValueError(msg)  # noqa: TRY004
     dAx = dAx if not isinstance(dAx, ad.Zero) else lax.zeros_like_array(Ax)
-    dAi = dAi if not isinstance(dAi, ad.Zero) else lax.zeros_like_array(Ai)
-    dAj = dAj if not isinstance(dAj, ad.Zero) else lax.zeros_like_array(Aj)
     db = db if not isinstance(db, ad.Zero) else lax.zeros_like_array(b)
     x = prim_solve.bind(Ai, Aj, Ax, b)
     dA_x = prim_dot.bind(Ai, Aj, dAx, x)
@@ -314,9 +315,10 @@ def dot_value_and_jvp(
 ) -> tuple[Array, Array]:
     Ai, Aj, Ax, b = arg_values
     dAi, dAj, dAx, db = arg_tangents
+    if not isinstance(dAi, ad.Zero) or not isinstance(dAj, ad.Zero):
+        msg = "Sparse indices Ai and Aj should not require gradients."
+        raise ValueError(msg)  # noqa: TRY004
     dAx = dAx if not isinstance(dAx, ad.Zero) else lax.zeros_like_array(Ax)
-    dAi = dAi if not isinstance(dAi, ad.Zero) else lax.zeros_like_array(Ai)
-    dAj = dAj if not isinstance(dAj, ad.Zero) else lax.zeros_like_array(Aj)
     db = db if not isinstance(db, ad.Zero) else lax.zeros_like_array(b)
     x = prim.bind(Ai, Aj, Ax, b)
     dA_b = prim.bind(Ai, Aj, dAx, b)
