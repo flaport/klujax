@@ -5,7 +5,7 @@ list:
     just --list
 
 # Set up development environment (clones dependencies first)
-dev: maybe-deps
+dev: maybe-deps bver
     uv venv --python 3.13 --clear
     uv sync --all-extras
     uv run python setup.py build_ext --inplace
@@ -13,6 +13,16 @@ dev: maybe-deps
 # Build distribution
 dist:
     uv run python setup.py build sdist bdist_wheel
+
+# Version bumping
+[linux,macos]
+bver:
+    curl -LsSf https://github.com/flaport/bver/releases/latest/download/install.sh | sh
+
+# Version bumping
+[windows]
+bver:
+    powershell -ExecutionPolicy ByPass -c "irm https://github.com/flaport/bver/releases/latest/download/install.ps1 | iex"
 
 # (Re-)initialize dependencies
 deps: suitesparse xla pybind11
@@ -67,3 +77,6 @@ clean-all: clean
     rm -rf xla
     rm -rf pybind11
     rm uv.lock
+
+bump version="patch":
+    bver bump "{{ version }}"
