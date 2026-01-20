@@ -41,6 +41,22 @@ dev = [
   "tbump>=6.11.0"
 ]
 
+[tool.bver]
+default-kind = "simple"
+git-action = "commit-tag-and-push"
+
+[[tool.bver.file]]
+src = "README.md"
+
+[[tool.bver.file]]
+src = "pyproject.toml"
+
+[[tool.bver.file]]
+src = "klujax.py"
+
+[[tool.bver.file]]
+src = "klujax.cpp"
+
 [tool.pytest.ini_options]
 addopts = '--tb=short'
 testpaths = ["tests.py"]
@@ -67,29 +83,3 @@ select = ["ALL"]
   "README.md",
   "MANIFEST.in"
 ]
-
-[[tool.tbump.file]]
-src = "README.md"
-
-[[tool.tbump.file]]
-src = "pyproject.toml"
-
-[[tool.tbump.file]]
-src = "klujax.py"
-
-[[tool.tbump.file]]
-src = "klujax.cpp"
-
-[tool.tbump.git]
-message_template = "Bump to {new_version}"
-tag_template = "{new_version}"
-
-[tool.tbump.version]
-current = "0.4.5"
-regex = '''
-  (?P<major>\d+)
-  \.
-  (?P<minor>\d+)
-  \.
-  (?P<patch>\d+)
-  '''
