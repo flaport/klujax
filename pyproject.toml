@@ -28,7 +28,7 @@ license = {file = "LICENSE"}
 name = "klujax"
 readme = "README.md"
 requires-python = ">=3.11"
-version = "0.4.6"
+version = "0.4.7"
 
 [project.optional-dependencies]
 dev = [
