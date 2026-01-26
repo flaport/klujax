@@ -76,7 +76,7 @@ select = ["ALL"]
 ".github/run_tests.py" = ["INP", "PTH", "T201", "S603", "S607"]
 "benchmark.py" = ["INP001", "T201"]
 "setup.py" = ["PTH", "ANN", "D101", "D102"]
-"tests.py" = ["D", "INP001", "ANN", "T201", "E501", "N806"]
+"tests.py" = ["D", "INP001", "ANN", "T201", "E501", "N806", "S101", "SIM108", "PLC0415", "B905"]
 
 [tool.setuptools.package-data]
 "*" = [
