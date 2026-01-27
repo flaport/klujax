@@ -16,7 +16,6 @@ import jax.extend.core
 import jax.numpy as jnp
 import klujax_cpp
 import numpy as np
-from jax import lax
 from jax.core import ShapedArray
 from jax.interpreters import ad, batching, mlir
 from jaxtyping import Array
@@ -299,8 +298,8 @@ def solve_value_and_jvp(
     if not isinstance(dAi, ad.Zero) or not isinstance(dAj, ad.Zero):
         msg = "Sparse indices Ai and Aj should not require gradients."
         raise ValueError(msg)  # noqa: TRY004
-    dAx = dAx if not isinstance(dAx, ad.Zero) else lax.zeros_like_array(Ax)
-    db = db if not isinstance(db, ad.Zero) else lax.zeros_like_array(b)
+    dAx = dAx if not isinstance(dAx, ad.Zero) else jnp.zeros_like(Ax)
+    db = db if not isinstance(db, ad.Zero) else jnp.zeros_like(b)
     x = prim_solve.bind(Ai, Aj, Ax, b)
     dA_x = prim_dot.bind(Ai, Aj, dAx, x)
     invA_dA_x = prim_solve.bind(Ai, Aj, Ax, dA_x)
@@ -318,8 +317,8 @@ def dot_value_and_jvp(
     if not isinstance(dAi, ad.Zero) or not isinstance(dAj, ad.Zero):
         msg = "Sparse indices Ai and Aj should not require gradients."
         raise ValueError(msg)  # noqa: TRY004
-    dAx = dAx if not isinstance(dAx, ad.Zero) else lax.zeros_like_array(Ax)
-    db = db if not isinstance(db, ad.Zero) else lax.zeros_like_array(b)
+    dAx = dAx if not isinstance(dAx, ad.Zero) else jnp.zeros_like(Ax)
+    db = db if not isinstance(db, ad.Zero) else jnp.zeros_like(b)
     x = prim.bind(Ai, Aj, Ax, b)
     dA_b = prim.bind(Ai, Aj, dAx, b)
     A_db = prim.bind(Ai, Aj, Ax, db)
