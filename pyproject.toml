@@ -28,7 +28,7 @@ license = {file = "LICENSE"}
 name = "klujax"
 readme = "README.md"
 requires-python = ">=3.11"
-version = "0.4.7"
+version = "0.4.8"
 
 [project.optional-dependencies]
 dev = [
@@ -41,10 +41,6 @@ dev = [
   "tbump>=6.11.0"
 ]
 
-[tool.bver]
-default-kind = "simple"
-git-action = "commit-tag-and-push"
-
 [[tool.bver.file]]
 src = "README.md"
 
@@ -56,6 +52,9 @@ src = "klujax.py"
 
 [[tool.bver.file]]
 src = "klujax.cpp"
+
+[tool.bver.git]
+action = "commit-tag-and-push"
 
 [tool.pytest.ini_options]
 addopts = '--tb=short'
