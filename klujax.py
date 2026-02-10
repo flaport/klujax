@@ -145,55 +145,17 @@ def factor(Ai: Array, Aj: Array, Ax: Array, symbolic: Array) -> Array:
 
 @jax.jit
 def solve_with_numeric(numeric: Array, b: Array, symbolic: Array) -> Array:
-    """Solve Ax=b using pre-computed numeric factorization.
-
-    Args:
-        numeric: [n_lhs?; uint64]: numeric handles
-        b: [n_lhs? x n_col x n_rhs?; float64|complex128]: target vector
-        symbolic: [uint64]: symbolic handle
-
-    Returns:
-        x: solution
-    """
+    """Solve Ax=b using pre-computed numeric factorization."""
     debug("solve_with_numeric")
     
     if symbolic.shape != ():
         raise ValueError("symbolic must be a scalar uint64 handle.")
     
-    # Save original shape for later
-    original_shape = b.shape
-    
-    # Get batch size from numeric
-    n_lhs_numeric = numeric.shape[0] if numeric.ndim > 0 else 1
-    
-    # Normalize b to 3D: (n_lhs, n_col, n_rhs)
-    if b.ndim == 1:
-        # b is (n_col,) -> (1, n_col, 1)
-        b = b[None, :, None]
-        shape = original_shape  # (n_col,)
-    elif b.ndim == 2:
-        # b is either (n_lhs, n_col) or (n_col, n_rhs)
-        # If numeric has multiple elements, treat first dim as batch
-        if n_lhs_numeric > 1 and b.shape[0] == n_lhs_numeric:
-            # b is (n_lhs, n_col) -> (n_lhs, n_col, 1)
-            b = b[:, :, None]
-            shape = original_shape  # (n_lhs, n_col)
-        else:
-            # b is (n_col, n_rhs) -> (1, n_col, n_rhs)
-            b = b[None, :, :]
-            shape = original_shape  # (n_col, n_rhs)
-    else:  # b.ndim == 3
-        shape = original_shape  # (n_lhs, n_col, n_rhs)
-    
-    # Call the appropriate C++ function
+    # Just call C++ - it handles shape logic
     if b.dtype in COMPLEX_DTYPES:
-        x = solve_with_numeric_c128.bind(symbolic, numeric, b)
+        return solve_with_numeric_c128.bind(symbolic, numeric, b)
     else:
-        x = solve_with_numeric_f64.bind(symbolic, numeric, b)
-    
-    # Reshape to match original input shape
-    return x.reshape(*shape)
-
+        return solve_with_numeric_f64.bind(symbolic, numeric, b)
 
 @jax.jit
 def dot(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
@@ -289,22 +251,28 @@ def analyze(Ai: Array, Aj: Array, n_col: int) -> Array:
     return analyze_p.bind(Ai, Aj, jnp.int32(n_col))
 
 
-def free_symbolic(symbolic: Array) -> None:
-    """Free the KLU symbolic object.
-
-    Args:
-        symbolic: [uint64]: pointer to the KLU symbolic object.
-    """
-    return free_symbolic_p.bind(symbolic)
-
-
-def free_numeric(numeric: Array) -> None:
+def free_numeric(numeric: Array) -> Array:
     """Free the KLU numeric objects.
 
     Args:
         numeric: [n_lhs?; uint64]: numeric handles
+
+    Returns:
+        status: int32 scalar (1 = success, 0 = nothing to free)
     """
     return free_numeric_p.bind(numeric)
+
+
+def free_symbolic(symbolic: Array) -> Array:
+    """Free the KLU symbolic object.
+
+    Args:
+        symbolic: [uint64]: pointer to the KLU symbolic object.
+
+    Returns:
+        status: int32 scalar (1 = success, 0 = nothing to free)
+    """
+    return free_symbolic_p.bind(symbolic)
 
 # Primitives ==========================================================================
 
@@ -363,12 +331,6 @@ def analyze_impl(Ai: Array, Aj: Array, n_col: Array) -> Array:
     return call(Ai, Aj, n_col)
 
 
-@free_symbolic_p.def_impl
-def free_symbolic_impl(symbolic: Array) -> None:
-    call = jax.ffi.ffi_call("free_symbolic", ())
-    return call(symbolic)
-
-
 @factor_f64.def_impl
 def factor_f64_impl(Ai, Aj, Ax, symbolic):
     n_lhs = Ax.shape[0]
@@ -390,11 +352,6 @@ def solve_with_numeric_f64_impl(symbolic, numeric, b):
 def solve_with_numeric_c128_impl(symbolic, numeric, b):
     call = jax.ffi.ffi_call("solve_with_numeric_c128", jax.ShapeDtypeStruct(b.shape, b.dtype))
     return call(symbolic, numeric, b)
-
-@free_numeric_p.def_impl
-def free_numeric_impl(numeric):
-    call = jax.ffi.ffi_call("free_numeric", ())
-    return call(numeric)
 
 
 def general_impl(name: str, Ai: Array, Aj: Array, Ax: Array, x: Array, *args: Array) -> Array:
@@ -479,8 +436,30 @@ jax.ffi.register_ffi_target(
     platform="cpu",
 )
 
-free_symbolic_low = mlir.lower_fun(free_symbolic_impl, multiple_results=True)
-mlir.register_lowering(free_symbolic_p, free_symbolic_low)
+jax.ffi.register_ffi_target(
+    "free_numeric",
+    klujax_cpp.free_numeric(),
+    platform="cpu",
+)
+
+@free_numeric_p.def_impl
+def free_numeric_impl(numeric):
+    call = jax.ffi.ffi_call("free_numeric", jax.ShapeDtypeStruct((), jnp.int32))
+    return call(numeric)
+
+
+@free_symbolic_p.def_impl
+def free_symbolic_impl(symbolic):
+    call = jax.ffi.ffi_call("free_symbolic", jax.ShapeDtypeStruct((), jnp.int32))
+    return call(symbolic)
+
+@free_numeric_p.def_abstract_eval
+def free_numeric_abstract_eval(numeric):
+    return ShapedArray((), jnp.int32)
+
+@free_symbolic_p.def_abstract_eval
+def free_symbolic_abstract_eval(symbolic):
+    return ShapedArray((), jnp.int32)
 
 jax.ffi.register_ffi_target("factor_f64", klujax_cpp.factor_f64(), platform="cpu")
 factor_f64_low = mlir.lower_fun(factor_f64_impl, multiple_results=False)
@@ -498,9 +477,11 @@ jax.ffi.register_ffi_target("solve_with_numeric_c128", klujax_cpp.solve_with_num
 solve_with_numeric_c128_low = mlir.lower_fun(solve_with_numeric_c128_impl, multiple_results=False)
 mlir.register_lowering(solve_with_numeric_c128, solve_with_numeric_c128_low)
 
-jax.ffi.register_ffi_target("free_numeric", klujax_cpp.free_numeric(), platform="cpu")
-free_numeric_low = mlir.lower_fun(free_numeric_impl, multiple_results=True)
+free_numeric_low = mlir.lower_fun(free_numeric_impl, multiple_results=False)
 mlir.register_lowering(free_numeric_p, free_numeric_low)
+
+free_symbolic_low = mlir.lower_fun(free_symbolic_impl, multiple_results=False)
+mlir.register_lowering(free_symbolic_p, free_symbolic_low)
 
 # Abstract Evals ======================================================================
 
@@ -532,11 +513,9 @@ def factor_abstract_eval(Ai, Aj, Ax, symbolic):
 @solve_with_numeric_f64.def_abstract_eval
 @solve_with_numeric_c128.def_abstract_eval
 def solve_with_numeric_abstract_eval(symbolic, numeric, b):
+    # Output has same shape as input b
     return ShapedArray(b.shape, b.dtype)
 
-@free_numeric_p.def_abstract_eval
-def free_numeric_abstract_eval(numeric):
-    return None
 
 # Forward Differentiation =============================================================
 

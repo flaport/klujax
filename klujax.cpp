@@ -8,11 +8,11 @@
 #include "klu.h"
 #include "pybind11/pybind11.h"
 #include "xla/ffi/api/ffi.h"
+#include <cstring> 
+#include <memory> 
+
 namespace py = pybind11;
 namespace ffi = xla::ffi;
-
-#include <cstring>  // for memset
-#include <memory>   // for unique_ptr
 
 ffi::Error validate_args(
     const ffi::Buffer<ffi::DataType::S32>& Ai,
@@ -508,17 +508,11 @@ ffi::Error factor_impl(
     if (sym_addr == 0) return ffi::Error::InvalidArgument("symbolic pointer is null");
     klu_symbolic* Symbolic = reinterpret_cast<klu_symbolic*>(sym_addr);
 
-    // We reuse validate_args but we need a dummy ds_x (b) to satisfy it.
-    // We construct a dummy ds_b that matches ds_Ax's batch size.
+
     int n_lhs = (int)ds_Ax[0];
     int n_nz = (int)ds_Ax[1];
-    // We need n_col. We can't easily get it from just Ax/Ai/Aj without passing it or inferring it.
-    // However, Symbolic->n is n_col.
     int n_col = Symbolic->n;
     
-    // validate_args expects ds_x to be [n_lhs, n_col, n_rhs].
-    // We can just check Ai/Aj/Ax consistency manually or construct a fake vector.
-    // Let's do manual consistency check for Ai/Aj/Ax to avoid constructing fake vector.
     if (Ai.dimensions().size() != 1 || Aj.dimensions().size() != 1) return ffi::Error::InvalidArgument("Ai/Aj must be 1D");
     if (Ai.dimensions()[0] != n_nz || Aj.dimensions()[0] != n_nz) return ffi::Error::InvalidArgument("Ai/Aj size mismatch with Ax");
 
@@ -613,37 +607,64 @@ ffi::Error solve_with_numeric_impl(
     if (sym_addr == 0) return ffi::Error::InvalidArgument("symbolic pointer is null");
     klu_symbolic* Symbolic = reinterpret_cast<klu_symbolic*>(sym_addr);
 
-    if (ds_b.size() != 3) return ffi::Error::InvalidArgument("b must be 3D");
-    if (ds_x.size() != 3) return ffi::Error::InvalidArgument("x must be 3D");
-
-    int n_lhs_x = (int)ds_x[0];
-    int n_col = (int)ds_x[1];
-    int n_rhs = (int)ds_x[2];
-
-    int n_lhs_b = (int)ds_b[0];
-    if (ds_b[1] != n_col || ds_b[2] != n_rhs) {
-        return ffi::Error::InvalidArgument("b and x dimension mismatch");
-    }
-    
     int n_numeric = numeric.element_count();
     const uint64_t* _numeric = numeric.typed_data();
-
-    // Determine actual output batch size
-    int n_lhs = n_lhs_x;  // x determines output size
     
+    // Parse b dimensions
+    int d_b = ds_b.size();
+    int n_lhs_b, n_col, n_rhs;
+    
+    if (d_b == 1) {
+        // b is (n_col,) -> treat as (1, n_col, 1)
+        n_lhs_b = 1;
+        n_col = ds_b[0];
+        n_rhs = 1;
+    } else if (d_b == 2) {
+        // b is (n_lhs, n_col) or (n_col, n_rhs)
+        // Decide based on numeric batch size
+        if (n_numeric > 1 && (int)ds_b[0] == n_numeric) {
+            // b is (n_lhs, n_col) -> (n_lhs, n_col, 1)
+            n_lhs_b = ds_b[0];
+            n_col = ds_b[1];
+            n_rhs = 1;
+        } else {
+            // b is (n_col, n_rhs) -> (1, n_col, n_rhs)
+            n_lhs_b = 1;
+            n_col = ds_b[0];
+            n_rhs = ds_b[1];
+        }
+    } else if (d_b == 3) {
+        // b is already (n_lhs, n_col, n_rhs)
+        n_lhs_b = ds_b[0];
+        n_col = ds_b[1];
+        n_rhs = ds_b[2];
+    } else {
+        return ffi::Error::InvalidArgument("b must be 1D, 2D, or 3D");
+    }
+    
+    // Determine output batch size
     bool broadcast_numeric = (n_numeric == 1);
     bool broadcast_b = (n_lhs_b == 1);
     
-    // Validate broadcasting rules
-    if (!broadcast_numeric && n_numeric != n_lhs) {
-        return ffi::Error::InvalidArgument("numeric batch size mismatch with x: got " + 
-                                          std::to_string(n_numeric) + " vs " + std::to_string(n_lhs));
+    int n_lhs;
+    if (!broadcast_numeric && !broadcast_b) {
+        if (n_numeric != n_lhs_b) {
+            return ffi::Error::InvalidArgument("numeric and b batch size mismatch");
+        }
+        n_lhs = n_numeric;
+    } else if (!broadcast_numeric) {
+        n_lhs = n_numeric;
+    } else if (!broadcast_b) {
+        n_lhs = n_lhs_b;
+    } else {
+        n_lhs = 1;
     }
-    if (!broadcast_b && n_lhs_b != n_lhs) {
-        return ffi::Error::InvalidArgument("b batch size mismatch with x: got " + 
-                                          std::to_string(n_lhs_b) + " vs " + std::to_string(n_lhs));
+    
+    // Validate output dimensions match expected
+    if (ds_x.size() != d_b) {
+        return ffi::Error::InvalidArgument("output dimensions don't match input");
     }
-
+    
     auto _x_temp = std::make_unique<T[]>(n_lhs * n_col * n_rhs);
     
     // Copy b to x_temp (transpose) with broadcasting
@@ -720,7 +741,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 
 ffi::Error free_numeric(
-    const ffi::Buffer<ffi::DataType::U64> numeric) {
+    const ffi::Buffer<ffi::DataType::U64> numeric,
+    ffi::Result<ffi::Buffer<ffi::DataType::S32>> status) {
     
     int n = numeric.element_count();
     const uint64_t* _numeric = numeric.typed_data();
@@ -735,22 +757,22 @@ ffi::Error free_numeric(
             klu_free_numeric(&Numeric, &Common);
         }
     }
+    
+    // returning value so function can be traced
+    *status->typed_data() = 1;
     return ffi::Error::Success();
 }
 
-XLA_FFI_DEFINE_HANDLER_SYMBOL(
-    free_numeric_handler, free_numeric,
-    ffi::Ffi::Bind()
-        .Arg<ffi::Buffer<ffi::DataType::U64>>()
-);
-
 ffi::Error free_symbolic(
-    const ffi::Buffer<ffi::DataType::U64> symbolic) {
+    const ffi::Buffer<ffi::DataType::U64> symbolic,
+    ffi::Result<ffi::Buffer<ffi::DataType::S32>> status) {
+    
     if (symbolic.element_count() != 1) {
         return ffi::Error::InvalidArgument("symbolic must be a scalar.");
     }
     uint64_t sym_addr = *symbolic.typed_data();
     if (sym_addr == 0) {
+        *status->typed_data() = 0;  // 0 = nothing to free
         return ffi::Error::Success();
     }
 
@@ -759,13 +781,23 @@ ffi::Error free_symbolic(
     klu_defaults(&Common);
     klu_free_symbolic(&Symbolic, &Common);
 
+    // returning value so function can be traced
+    *status->typed_data() = 1; 
     return ffi::Error::Success();
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    free_numeric_handler, free_numeric,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()    // numeric
+        .Ret<ffi::Buffer<ffi::DataType::S32>>()    // status (instead of no return)
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
     free_symbolic_handler, free_symbolic,
     ffi::Ffi::Bind()
-        .Arg<ffi::Buffer<ffi::DataType::U64>>()  // symbolic
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()    // symbolic
+        .Ret<ffi::Buffer<ffi::DataType::S32>>()    // status
 );
 
 ffi::Error analyze(
