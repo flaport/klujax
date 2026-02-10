@@ -172,13 +172,29 @@ def test_4d_vmap(dtype, op_sparse):
 @log_test_name
 def test_analyze():
     Ai, Aj, Ax, b = _get_rand_arrs_1d(15, (n_col := 5), dtype=np.float64)
+
+    # 1. Test Eager Analysis
     symbolic = klujax.analyze(Ai, Aj, n_col)
-    assert symbolic.shape == ()
-    assert symbolic.dtype == jnp.uint64
-    symbolic = jax.jit(klujax.analyze)(Ai, Aj, n_col)
-    assert symbolic.shape == ()
-    assert symbolic.dtype == jnp.uint64
+    assert isinstance(symbolic, klujax.KLUHandleManager)
+    assert symbolic._owner is True
+    assert symbolic.handle.dtype == jnp.uint64
+    
+    # Manually free to be clean before next step
     klujax.free_symbolic(symbolic)
+    assert symbolic._freed is True
+
+    @jax.jit
+    def jit_analyze_and_solve(Ai, Aj, Ax, b):
+        # Create handle inside JIT
+        sym = klujax.analyze(Ai, Aj, 5) # Inside JIT, this is a Tracer
+
+        x = klujax.solve_with_symbol(Ai, Aj, Ax, b, sym)
+        
+        klujax.free_symbolic(sym, dependency=x)
+        return x
+
+    x = jit_analyze_and_solve(Ai, Aj, Ax, b)
+    assert x.shape == (n_col,)
 
 
 @log_test_name
@@ -333,3 +349,27 @@ def _is_almost_equal(arr1, arr2):
         return False
     else:
         return True
+    
+def test_solve_with_symbol_jvp():
+
+    Ai = jnp.array([0, 1], dtype=jnp.int32)
+    Aj = jnp.array([0, 1], dtype=jnp.int32)
+    Ax = jnp.array([2.0, 4.0], dtype=jnp.float64) # Values
+    b = jnp.array([10.0, 20.0], dtype=jnp.float64)
+    
+    # Pre-compute symbolic factorization
+    n_col = 2
+    symbolic = klujax.analyze(Ai, Aj, n_col)
+    
+    def solve_step(Ax_vals, b_vec):
+        return klujax.solve_with_symbol(Ai, Aj, Ax_vals, b_vec, symbolic)
+
+    # Tangents (perturbations)
+    tangent_Ax = jnp.array([0.1, 0.1], dtype=jnp.float64)
+    tangent_b = jnp.array([0.0, 0.0], dtype=jnp.float64)
+    
+    # This triggers the JVP rule lookup
+    primals, tangents = jax.jvp(solve_step, (Ax, b), (tangent_Ax, tangent_b))
+    assert primals.shape == (2,)
+    assert tangents.shape == (2,)
+    
