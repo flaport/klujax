@@ -120,7 +120,7 @@ for t in range(steps):
 
 ### Fine-Grained Control (Numeric Factorization)
 
-If you need to solve the same system with many different $b$ vectors while the matrix $A$ remains constant, you can further split the numeric factorization. This is often performed in a modified Newton-Raphson loop where the computationally expensive jacobian+ factorization is only evaluated once and the **solve** stage is deemed "cheap" in comparison
+If you need to solve the same system with many different $b$ vectors while the matrix $A$ remains constant, you can further split the numeric factorization. This is often performed in a modified Newton-Raphson loop where the computationally expensive jacobian+factorization is only evaluated once and the **solve** stage is deemed "cheap" in comparison
 
 
 ```python
@@ -137,12 +137,12 @@ for i in range(100):
 ```
 
 ### Lifecycle & Pointer Pitfalls
-Because klujax manages raw C++ pointers, there are strict rules for avoiding memory leaks and segmentation faults.
+Because `klujax.analyze` and `klujax.factor` generate `KLUHandleManager` objects which wrap low level C++ pointers, there are strict rules for avoiding memory leaks and segmentation faults.
 
 #### The "Ghost Pointer" Problem inside JIT:
-JAX's jit works by "tracing" your code. During tracing, Python objects like the `KLUHandleManager` are converted into symbolic Tracers.
+JAX's jit works by tracing your code. During tracing, Python objects like the `KLUHandleManager` are converted into symbolic Tracers.
 
-* Outside JIT: The `KLUHandleManager` uses RAII. When the Python variable is deleted or goes out of scope, the C++ memory is freed automatically.
+* Outside JIT: The `KLUHandleManager` uses RAII (Resource Acquisition Is Initialization). When the Python variable is deleted or goes out of scope, the C++ memory is freed automatically.
 
 * Inside JIT: If you create a handle (via `analyze` or `factor`) **inside** a JIT-compiled function, the Python manager is "lost" during the conversion to XLA. XLA will allocate the C++ memory at runtime, but it will **never** call the free function.
 
