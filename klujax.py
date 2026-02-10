@@ -16,6 +16,7 @@ import jax.extend.core
 import jax.numpy as jnp
 import klujax_cpp
 import numpy as np
+from jax import lax
 from jax.core import ShapedArray
 from jax.interpreters import ad, batching, mlir
 from jaxtyping import Array
@@ -155,7 +156,7 @@ def coalesce(
 
     return Ai, Aj, Ax.reshape(*shape[:-1], -1)
 
-
+# Split Solve pointer management =========================================================
 
 class KLUHandleManager:
     """RAII wrapper for KLU handles. Handles are freed on __del__ or __exit__."""
@@ -201,7 +202,6 @@ def _klu_unflatten(aux: Tuple[Callable], children: Tuple[Array]) -> KLUHandleMan
 
 jax.tree_util.register_pytree_node(KLUHandleManager, _klu_flatten, _klu_unflatten)
 
-# --- Lifecycle Functions ---
 
 def free_symbolic(symbolic: Union[KLUHandleManager, Array], dependency: Any = None) -> Array:
     """Free the KLU symbolic analysis object.
@@ -255,7 +255,7 @@ def free_numeric(numeric: Union[KLUHandleManager, Array], dependency: Any = None
         )
     return free_numeric_p.bind(handle)
 
-# --- High Level API ---
+# Split Solve routines =============================================================
 
 def analyze(Ai: Array, Aj: Array, n_col: int) -> KLUHandleManager:
     """Analyze the sparsity pattern of a matrix A.
@@ -396,7 +396,6 @@ def solve_with_numeric(numeric: Union[KLUHandleManager, Array], b: Array, symbol
     if isinstance(num_h, jax.core.Tracer) and isinstance(numeric, KLUHandleManager):
         free_numeric(numeric, dependency=result)
     return result
-
 
 
 # Primitives ==========================================================================
@@ -1201,84 +1200,123 @@ def validate_args(  # noqa: C901,PLR0912
     return Ai, Aj, Ax, x, shape
 
 
-# =============================================================================
-# PATCH: Differentiation rules for solve_with_symbol
-# =============================================================================
+# Differentiation rules for solve_with_symbol =================================
 
+def solve_with_symbol_value_and_jvp(
+    prim_solve: jax.extend.core.Primitive,
+    prim_dot: jax.extend.core.Primitive,
+    arg_values: Tuple[Array, Array, Array, Array, Array],
+    arg_tangents: Tuple[Any, Any, Any, Any, Any],
+) -> Tuple[Array, Array]:
+    """Jacobian-vector product rule for `solve_with_symbol`.
 
-# 1. Forward Differentiation (JVP)
-# Rule: dx = A^-1 * (db - dA * x)
-def solve_with_symbol_value_and_jvp(prim_solve, prim_dot, arg_values, arg_tangents):
+    The rule for the JVP of a linear solve `x = A^-1 * b` is:
+    `dx = A^-1 * (db - dA * x)`
+
+    This function implements this rule efficiently. It first computes the primal
+    solution `x`. Then it computes the right-hand side of the tangent system,
+    `rhs = db - dA * x`. If `dA` is not zero, `dA * x` is computed using the
+    `dot` primitive. If the `rhs` is not zero, `dx` is found by solving the
+    system `A * dx = rhs`, reusing the symbolic factorization of A for
+    efficiency.
+
+    Args:
+        prim_solve: The `solve_with_symbol` primitive.
+        prim_dot: The corresponding `dot` primitive.
+        arg_values: Primal values for `(Ai, Aj, Ax, b, symbolic)`.
+        arg_tangents: Tangent values for `(Ai, Aj, Ax, b, symbolic)`.
+
+    Returns:
+        A tuple containing the primal output `x` and the tangent output `dx`.
+    """
     Ai, Aj, Ax, b, symbolic = arg_values
     t_Ai, t_Aj, t_Ax, t_b, t_symbolic = arg_tangents
-    
-    # Compute primal solution
+
     x = prim_solve.bind(Ai, Aj, Ax, b, symbolic)
-    
-    # Compute RHS of the tangent system: rhs = db - dA * x
+
     rhs = t_b
-    
-    # If dA (t_Ax) is not zero, subtract dA * x
-    if type(t_Ax) is not ad.Zero:
-        # We reuse the dot primitive to compute dA * x
+
+    if not isinstance(t_Ax, ad.Zero):
         dAx = prim_dot.bind(Ai, Aj, t_Ax, x)
-        
-        if type(rhs) is ad.Zero:
+        if isinstance(rhs, ad.Zero):
             rhs = -dAx
         else:
             rhs = rhs - dAx
-            
-    # If the resulting RHS is zero, the tangent is zero
-    if type(rhs) is ad.Zero:
+
+    if isinstance(rhs, ad.Zero):
         dx = lax.zeros_like_array(x)
     else:
-        # Solve for dx using the SAME symbolic handle for efficiency
         dx = prim_solve.bind(Ai, Aj, Ax, rhs, symbolic)
-        
+
     return x, dx
 
 # Register JVP for Float64
-def solve_with_symbol_f64_value_and_jvp(arg_values, arg_tangents):
+def solve_with_symbol_f64_value_and_jvp(
+    arg_values: Tuple[Array, Array, Array, Array, Array],
+    arg_tangents: Tuple[Any, Any, Any, Any, Any],
+) -> Tuple[Array, Array]:
+    """JVP rule for float64 solve_with_symbol."""
     return solve_with_symbol_value_and_jvp(
-        solve_with_symbol_f64, 
-        dot_f64, 
-        arg_values, 
-        arg_tangents
+        solve_with_symbol_f64,
+        dot_f64,
+        arg_values,
+        arg_tangents,
     )
 
 ad.primitive_jvps[solve_with_symbol_f64] = solve_with_symbol_f64_value_and_jvp
 
 # Register JVP for Complex128
-def solve_with_symbol_c128_value_and_jvp(arg_values, arg_tangents):
+def solve_with_symbol_c128_value_and_jvp(
+    arg_values: Tuple[Array, Array, Array, Array, Array],
+    arg_tangents: Tuple[Any, Any, Any, Any, Any],
+) -> Tuple[Array, Array]:
+    """JVP rule for complex128 solve_with_symbol."""
     return solve_with_symbol_value_and_jvp(
-        solve_with_symbol_c128, 
-        dot_c128, 
-        arg_values, 
-        arg_tangents
+        solve_with_symbol_c128,
+        dot_c128,
+        arg_values,
+        arg_tangents,
     )
 
 ad.primitive_jvps[solve_with_symbol_c128] = solve_with_symbol_c128_value_and_jvp
 
 
-# 2. Reverse Differentiation (Transpose)
-# Note: For the reverse pass (A.T), we cannot reuse the 'symbolic' handle because 
-# it describes A, not A.T. Therefore, we fallback to the standard solve_transpose 
-# logic which effectively treats it like a fresh solve.
-def solve_with_symbol_transpose(solve_prim, ct, Ai, Aj, Ax, b, symbolic):
-    # Delegate to the existing solve_transpose logic.
-    # We pass the standard 'solve' primitive (e.g. solve_f64) instead of 
-    # solve_with_symbol because we need to re-analyze for the transpose solve anyway.
+def solve_with_symbol_transpose(
+    solve_prim: jax.extend.core.Primitive,
+    ct: Array,
+    Ai: Array,
+    Aj: Array,
+    Ax: Array,
+    b: Array,
+    symbolic: Array,
+) -> tuple[Array, Array, Array, Array, None]:
+    """Compute the transpose of solve_with_symbol.
+
+    Note:
+        For the reverse pass (A.T), we cannot reuse the 'symbolic' handle because
+        it describes A, not A.T. Therefore, we fallback to the standard solve_transpose
+        logic which effectively treats it like a fresh solve.
+
+    Args:
+        solve_prim: [Primitive]: the primitive to transpose
+        ct: [Array]: the cotangent vector
+        Ai: [n_nz; int32]: the row indices of the sparse matrix A
+        Aj: [n_nz; int32]: the column indices of the sparse matrix A
+        Ax: [n_lhs? x n_nz; float64|complex128]: the values of the sparse matrix A
+        b:  [n_lhs? x n_col x n_rhs?; float64|complex128]: the target vector
+        symbolic: [Array]: the symbolic analysis handle
+
+    Returns:
+        tangents: tuple of tangents for (Ai, Aj, Ax, b, symbolic)
+
+    """
     if solve_prim is solve_with_symbol_f64:
         base_solve = solve_f64
     else:
         base_solve = solve_c128
-        
-    # Reuse the logic in solve_transpose (which must be available in scope)
-    # The signature of solve_transpose is (solve_prim, ct, Ai, Aj, Ax, b)
-    # It returns (t_Ai, t_Aj, t_Ax, t_b)
+
     t_Ai, t_Aj, t_Ax, t_b = solve_transpose(base_solve, ct, Ai, Aj, Ax, b)
-    
-    # Return tangents for (Ai, Aj, Ax, b, symbolic). Symbolic has no gradient.
+
     return t_Ai, t_Aj, t_Ax, t_b, None
 
 def solve_with_symbol_f64_transpose(ct, Ai, Aj, Ax, b, symbolic):
