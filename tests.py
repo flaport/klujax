@@ -216,6 +216,40 @@ def test_solve_with_symbol_batched(dtype):
 
     klujax.free_symbolic(symbolic)
 
+@log_test_name
+@parametrize_dtypes
+def test_solve_with_numeric(dtype):
+    Ai, Aj, Ax, b = _get_rand_arrs_1d(15, (n_col := 5), dtype=dtype)
+    symbolic = klujax.analyze(Ai, Aj, n_col)
+    numeric = klujax.factor(Ai, Aj, Ax, symbolic)
+
+    x_sp = klujax.solve_with_numeric(numeric, b, symbolic)
+
+    A = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax)
+    x = jsp.linalg.solve(A, b)
+    _log_and_test_equality(x, x_sp)
+
+    klujax.free_numeric(numeric)
+    klujax.free_symbolic(symbolic)
+
+
+@log_test_name
+@parametrize_dtypes
+def test_solve_with_numeric_batched(dtype):
+    Ai, Aj, Ax, b = _get_rand_arrs_2d((n_lhs := 3), 15, (n_col := 5), dtype=dtype)
+    symbolic = klujax.analyze(Ai, Aj, n_col)
+    numeric = klujax.factor(Ai, Aj, Ax, symbolic)
+
+    x_sp = klujax.solve_with_numeric(numeric, b, symbolic)
+
+    # Dense verification
+    op_dense = jax.vmap(jsp.linalg.solve, (0, 0), 0)
+    A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
+    x = op_dense(A, b)
+    _log_and_test_equality(x, x_sp)
+
+    klujax.free_numeric(numeric)
+    klujax.free_symbolic(symbolic)
 
 def _get_rand_arrs_1d(n_nz, n_col, *, dtype, seed=33):
     Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(seed), 4)
