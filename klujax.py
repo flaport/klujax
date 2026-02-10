@@ -4,7 +4,7 @@
 
 __version__ = "0.4.8"
 __author__ = "Floris Laporte"
-__all__ = ["coalesce", "dot", "solve"]
+__all__ = ["analyze", "coalesce", "dot", "free_symbolic", "solve", "solve_with_symbol"]
 
 # Imports =============================================================================
 
@@ -75,6 +75,45 @@ def solve(Ai: Array, Aj: Array, Ax: Array, b: Array) -> Array:
 
     return x.reshape(*shape)
 
+
+@jax.jit
+def solve_with_symbol(Ai: Array, Aj: Array, Ax: Array, b: Array, symbolic: Array) -> Array:
+    """Solve for x in the sparse linear system Ax=b using a pre-computed symbolic factorization.
+
+    Args:
+        Ai: [n_nz; int32]: the row indices of the sparse matrix A
+        Aj: [n_nz; int32]: the column indices of the sparse matrix A
+        Ax: [n_lhs? x n_nz; float64|complex128]: the values of the sparse matrix A
+        b:  [n_lhs? x n_col x n_rhs?; float64|complex128]: the target vector
+        symbolic: [uint64]: pointer to the KLU symbolic object (from analyze)
+
+    Returns:
+        x: the result (x≈A^-1b)
+    """
+    debug("solve_with_symbol")
+    Ai, Aj, Ax, b, shape = validate_args(Ai, Aj, Ax, b, x_name="b")
+    if symbolic.shape != ():
+        raise ValueError("symbolic must be a scalar uint64 handle.")
+
+    if any(x.dtype in COMPLEX_DTYPES for x in (Ax, b)):
+        debug("solve_with_symbol-complex128")
+        x = solve_with_symbol_c128.bind(
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            Ax.astype(jnp.complex128),
+            b.astype(jnp.complex128),
+            symbolic.astype(jnp.uint64),
+        )
+    else:
+        debug("solve_with_symbol-float64")
+        x = solve_with_symbol_f64.bind(
+            Ai.astype(jnp.int32),
+            Aj.astype(jnp.int32),
+            Ax.astype(jnp.float64),
+            b.astype(jnp.float64),
+            symbolic.astype(jnp.uint64),
+        )
+    return x.reshape(*shape)
 
 @jax.jit
 def dot(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
@@ -154,12 +193,41 @@ def coalesce(
     return Ai, Aj, Ax.reshape(*shape[:-1], -1)
 
 
+def analyze(Ai: Array, Aj: Array, n_col: int) -> Array:
+    """Analyze the sparsity pattern of a matrix A and return a pointer to the KLU symbolic object.
+
+    Args:
+        Ai: [n_nz; int32]: the row indices of the sparse matrix A
+        Aj: [n_nz; int32]: the column indices of the sparse matrix A
+        n_col: int: the number of columns in the matrix
+
+    Returns:
+        symbolic: [uint64]: a scalar array containing the pointer to the KLU symbolic object.
+    """
+    Ai = jnp.asarray(Ai, dtype=jnp.int32)
+    Aj = jnp.asarray(Aj, dtype=jnp.int32)
+    return analyze_p.bind(Ai, Aj, jnp.int32(n_col))
+
+
+def free_symbolic(symbolic: Array) -> None:
+    """Free the KLU symbolic object.
+
+    Args:
+        symbolic: [uint64]: pointer to the KLU symbolic object.
+    """
+    return free_symbolic_p.bind(symbolic)
+
+
 # Primitives ==========================================================================
 
 dot_f64 = jax.extend.core.Primitive("dot_f64")
 dot_c128 = jax.extend.core.Primitive("dot_c128")
 solve_f64 = jax.extend.core.Primitive("solve_f64")
 solve_c128 = jax.extend.core.Primitive("solve_c128")
+analyze_p = jax.extend.core.Primitive("analyze")
+solve_with_symbol_f64 = jax.extend.core.Primitive("solve_with_symbol_f64")
+solve_with_symbol_c128 = jax.extend.core.Primitive("solve_with_symbol_c128")
+free_symbolic_p = jax.extend.core.Primitive("free_symbolic")
 
 # Implementations =====================================================================
 
@@ -184,7 +252,31 @@ def solve_c128_impl(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
     return general_impl("solve_c128", Ai, Aj, Ax, x)
 
 
-def general_impl(name: str, Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
+@solve_with_symbol_f64.def_impl
+def solve_with_symbol_f64_impl(Ai: Array, Aj: Array, Ax: Array, b: Array, symbolic: Array) -> Array:
+    return general_impl("solve_with_symbol_f64", Ai, Aj, Ax, b, symbolic)
+
+
+@solve_with_symbol_c128.def_impl
+def solve_with_symbol_c128_impl(Ai: Array, Aj: Array, Ax: Array, b: Array, symbolic: Array) -> Array:
+    return general_impl("solve_with_symbol_c128", Ai, Aj, Ax, b, symbolic)
+
+
+@analyze_p.def_impl
+def analyze_impl(Ai: Array, Aj: Array, n_col: Array) -> Array:
+    call = jax.ffi.ffi_call(
+        "analyze", jax.ShapeDtypeStruct((), jnp.uint64)
+    )
+    return call(Ai, Aj, n_col)
+
+
+@free_symbolic_p.def_impl
+def free_symbolic_impl(symbolic: Array) -> None:
+    call = jax.ffi.ffi_call("free_symbolic", ())
+    return call(symbolic)
+
+
+def general_impl(name: str, Ai: Array, Aj: Array, Ax: Array, x: Array, *args: Array) -> Array:
     call = jax.ffi.ffi_call(
         name,
         jax.ShapeDtypeStruct(x.shape, x.dtype),
@@ -192,7 +284,7 @@ def general_impl(name: str, Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
     if not callable(call):
         msg = "jax.ffi.ffi_call did not return a callable."
         raise RuntimeError(msg)  # noqa: TRY004
-    return call(Ai, Aj, Ax, x)
+    return call(Ai, Aj, Ax, x, *args)
 
 
 # Lowerings ===========================================================================
@@ -233,6 +325,42 @@ jax.ffi.register_ffi_target(
 solve_c128_low = mlir.lower_fun(solve_c128_impl, multiple_results=False)
 mlir.register_lowering(solve_c128, solve_c128_low)
 
+jax.ffi.register_ffi_target(
+    "analyze",
+    klujax_cpp.analyze(),
+    platform="cpu",
+)
+
+analyze_low = mlir.lower_fun(analyze_impl, multiple_results=False)
+mlir.register_lowering(analyze_p, analyze_low)
+
+jax.ffi.register_ffi_target(
+    "solve_with_symbol_f64",
+    klujax_cpp.solve_with_symbol_f64(),
+    platform="cpu",
+)
+
+solve_with_symbol_f64_low = mlir.lower_fun(solve_with_symbol_f64_impl, multiple_results=False)
+mlir.register_lowering(solve_with_symbol_f64, solve_with_symbol_f64_low)
+
+jax.ffi.register_ffi_target(
+    "solve_with_symbol_c128",
+    klujax_cpp.solve_with_symbol_c128(),
+    platform="cpu",
+)
+
+solve_with_symbol_c128_low = mlir.lower_fun(solve_with_symbol_c128_impl, multiple_results=False)
+mlir.register_lowering(solve_with_symbol_c128, solve_with_symbol_c128_low)
+
+jax.ffi.register_ffi_target(
+    "free_symbolic",
+    klujax_cpp.free_symbolic(),
+    platform="cpu",
+)
+
+free_symbolic_low = mlir.lower_fun(free_symbolic_impl, multiple_results=True)
+mlir.register_lowering(free_symbolic_p, free_symbolic_low)
+
 # Abstract Evals ======================================================================
 
 
@@ -240,8 +368,20 @@ mlir.register_lowering(solve_c128, solve_c128_low)
 @dot_c128.def_abstract_eval
 @solve_f64.def_abstract_eval
 @solve_c128.def_abstract_eval
-def general_abstract_eval(Ai: Array, Aj: Array, Ax: Array, b: Array) -> ShapedArray:  # noqa: ARG001
+@solve_with_symbol_f64.def_abstract_eval
+@solve_with_symbol_c128.def_abstract_eval
+def general_abstract_eval(Ai: Array, Aj: Array, Ax: Array, b: Array, *args: Array) -> ShapedArray:  # noqa: ARG001
     return ShapedArray(b.shape, b.dtype)
+
+
+@analyze_p.def_abstract_eval
+def analyze_abstract_eval(Ai: Array, Aj: Array, n_col: Array) -> ShapedArray:  # noqa: ARG001
+    return ShapedArray((), jnp.uint64)
+
+
+@free_symbolic_p.def_abstract_eval
+def free_symbolic_abstract_eval(symbolic: Array) -> None:  # noqa: ARG001
+    return None
 
 
 # Forward Differentiation =============================================================

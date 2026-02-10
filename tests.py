@@ -169,6 +169,54 @@ def test_4d_vmap(dtype, op_sparse):
     _log_and_test_equality(r[1], r2)
 
 
+@log_test_name
+def test_analyze():
+    Ai, Aj, Ax, b = _get_rand_arrs_1d(15, (n_col := 5), dtype=np.float64)
+    symbolic = klujax.analyze(Ai, Aj, n_col)
+    assert symbolic.shape == ()
+    assert symbolic.dtype == jnp.uint64
+    symbolic = jax.jit(klujax.analyze)(Ai, Aj, n_col)
+    assert symbolic.shape == ()
+    assert symbolic.dtype == jnp.uint64
+    klujax.free_symbolic(symbolic)
+
+
+@log_test_name
+@parametrize_dtypes
+def test_solve_with_symbol(dtype):
+    Ai, Aj, Ax, b = _get_rand_arrs_1d(15, (n_col := 5), dtype=dtype)
+    symbolic = klujax.analyze(Ai, Aj, n_col)
+
+    x_sp = klujax.solve_with_symbol(Ai, Aj, Ax, b, symbolic)
+
+    A = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax)
+    x = jsp.linalg.solve(A, b)
+    _log_and_test_equality(x, x_sp)
+
+    # Test JIT
+    x_sp_jit = jax.jit(klujax.solve_with_symbol)(Ai, Aj, Ax, b, symbolic)
+    _log_and_test_equality(x, x_sp_jit)
+
+    klujax.free_symbolic(symbolic)
+
+
+@log_test_name
+@parametrize_dtypes
+def test_solve_with_symbol_batched(dtype):
+    Ai, Aj, Ax, b = _get_rand_arrs_2d((n_lhs := 3), 15, (n_col := 5), dtype=dtype)
+    symbolic = klujax.analyze(Ai, Aj, n_col)
+
+    x_sp = klujax.solve_with_symbol(Ai, Aj, Ax, b, symbolic)
+
+    # Dense verification
+    op_dense = jax.vmap(jsp.linalg.solve, (0, 0), 0)
+    A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
+    x = op_dense(A, b)
+    _log_and_test_equality(x, x_sp)
+
+    klujax.free_symbolic(symbolic)
+
+
 def _get_rand_arrs_1d(n_nz, n_col, *, dtype, seed=33):
     Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(seed), 4)
     Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)

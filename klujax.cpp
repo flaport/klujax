@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include <complex>
+#include <cstdint>
 #include "klu.h"
 #include "pybind11/pybind11.h"
 #include "xla/ffi/api/ffi.h"
@@ -365,6 +366,213 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(  // b = A x
         .Ret<ffi::Buffer<ffi::DataType::C128>>()  // x
 );
 
+template <typename T>
+ffi::Error solve_with_symbol_impl(
+    const ffi::Buffer<ffi::DataType::S32>& Ai,
+    const ffi::Buffer<ffi::DataType::S32>& Aj,
+    const ffi::AnyBuffer::Dimensions& ds_Ax,
+    const ffi::AnyBuffer::Dimensions& ds_b,
+    const ffi::Buffer<ffi::DataType::U64>& symbolic,
+    const T* _Ax,
+    const T* _b,
+    T* _x) {
+    if (symbolic.element_count() != 1) return ffi::Error::InvalidArgument("symbolic must be scalar");
+    uint64_t sym_addr = *symbolic.typed_data();
+    if (sym_addr == 0) return ffi::Error::InvalidArgument("symbolic pointer is null");
+    klu_symbolic* Symbolic = reinterpret_cast<klu_symbolic*>(sym_addr);
+
+    ffi::Error err = validate_args(Ai, Aj, ds_Ax, ds_b);
+    if (err.failure()) {
+        return err;
+    }
+
+    int n_lhs = (int)ds_b[0];
+    int n_col = (int)ds_b[1];
+    int n_rhs = (int)ds_b[2];
+    int n_nz = (int)ds_Ax[1];
+    const int* _Ai = Ai.typed_data();
+    const int* _Aj = Aj.typed_data();
+
+    // get COO -> CSC transformation information (using RAII for automatic cleanup)
+    auto _Bk = std::make_unique<int[]>(n_nz);  // Ax -> Bx transformation indices
+    auto _Bi = std::make_unique<int[]>(n_nz);
+    auto _Bp = std::make_unique<int[]>(n_col + 1);
+    auto _Bx = std::make_unique<T[]>(n_nz);
+
+    coo_to_csc_analyze(n_col, n_nz, _Ai, _Aj, _Bi.get(), _Bp.get(), _Bk.get());
+
+    // copy _b into _x_temp and transpose the last two dimensions since KLU expects col-major layout
+    auto _x_temp = std::make_unique<T[]>(n_lhs * n_col * n_rhs);
+    for (int m = 0; m < n_lhs; m++) {
+        for (int n = 0; n < n_col; n++) {
+            for (int p = 0; p < n_rhs; p++) {
+                _x_temp[m * n_rhs * n_col + p * n_col + n] = _b[m * n_col * n_rhs + n * n_rhs + p];
+            }
+        }
+    }
+
+    klu_common Common;
+    klu_defaults(&Common);
+
+    klu_numeric* Numeric;
+    for (int i = 0; i < n_lhs; i++) {
+        int m = i * n_nz;
+        int n = i * n_rhs * n_col;
+
+        // convert COO Ax to CSC Bx
+        for (int k = 0; k < n_nz; k++) {
+            _Bx[k] = _Ax[m + _Bk[k]];
+        }
+
+        // solve using KLU with provided Symbolic handle
+        Numeric = KluTraits<T>::factor(_Bp.get(), _Bi.get(), _Bx.get(), Symbolic, &Common);
+        if (Numeric == nullptr || Common.status < KLU_OK) {
+            return ffi::Error::InvalidArgument("klu_factor/z_factor failed (singular matrix?)");
+        }
+        KluTraits<T>::solve(Symbolic, Numeric, n_col, n_rhs, &_x_temp[n], &Common);
+        if (Common.status < KLU_OK) {
+            klu_free_numeric(&Numeric, &Common);
+            return ffi::Error::InvalidArgument("klu_solve/z_solve failed");
+        }
+        klu_free_numeric(&Numeric, &Common);
+    }
+
+    // copy _x_temp into _x and transpose
+    for (int m = 0; m < n_lhs; m++) {
+        for (int n = 0; n < n_col; n++) {
+            for (int p = 0; p < n_rhs; p++) {
+                _x[m * n_col * n_rhs + n * n_rhs + p] = _x_temp[m * n_rhs * n_col + p * n_col + n];
+            }
+        }
+    }
+
+    return ffi::Error::Success();
+}
+
+ffi::Error solve_with_symbol_f64(
+    const ffi::Buffer<ffi::DataType::S32> Ai,
+    const ffi::Buffer<ffi::DataType::S32> Aj,
+    const ffi::Buffer<ffi::DataType::F64> Ax,
+    const ffi::Buffer<ffi::DataType::F64> b,
+    const ffi::Buffer<ffi::DataType::U64> symbolic,
+    ffi::Result<ffi::Buffer<ffi::DataType::F64>> x) {
+    return solve_with_symbol_impl<double>(Ai, Aj, Ax.dimensions(), b.dimensions(), symbolic,
+                                          Ax.typed_data(), b.typed_data(), x->typed_data());
+}
+
+ffi::Error solve_with_symbol_c128(
+    const ffi::Buffer<ffi::DataType::S32> Ai,
+    const ffi::Buffer<ffi::DataType::S32> Aj,
+    const ffi::Buffer<ffi::DataType::C128> Ax,
+    const ffi::Buffer<ffi::DataType::C128> b,
+    const ffi::Buffer<ffi::DataType::U64> symbolic,
+    ffi::Result<ffi::Buffer<ffi::DataType::C128>> x) {
+    return solve_with_symbol_impl<Complex>(Ai, Aj, Ax.dimensions(), b.dimensions(), symbolic,
+                                           reinterpret_cast<const Complex*>(Ax.typed_data()),
+                                           reinterpret_cast<const Complex*>(b.typed_data()),
+                                           reinterpret_cast<Complex*>(x->typed_data()));
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    solve_with_symbol_f64_handler, solve_with_symbol_f64,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Ai
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Aj
+        .Arg<ffi::Buffer<ffi::DataType::F64>>()  // Ax
+        .Arg<ffi::Buffer<ffi::DataType::F64>>()  // b
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()  // symbolic
+        .Ret<ffi::Buffer<ffi::DataType::F64>>()  // x
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    solve_with_symbol_c128_handler, solve_with_symbol_c128,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()   // Ai
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()   // Aj
+        .Arg<ffi::Buffer<ffi::DataType::C128>>()  // Ax
+        .Arg<ffi::Buffer<ffi::DataType::C128>>()  // b
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()   // symbolic
+        .Ret<ffi::Buffer<ffi::DataType::C128>>()  // x
+);
+
+ffi::Error free_symbolic(
+    const ffi::Buffer<ffi::DataType::U64> symbolic) {
+    if (symbolic.element_count() != 1) {
+        return ffi::Error::InvalidArgument("symbolic must be a scalar.");
+    }
+    uint64_t sym_addr = *symbolic.typed_data();
+    if (sym_addr == 0) {
+        return ffi::Error::Success();
+    }
+
+    klu_symbolic* Symbolic = reinterpret_cast<klu_symbolic*>(sym_addr);
+    klu_common Common;
+    klu_defaults(&Common);
+    klu_free_symbolic(&Symbolic, &Common);
+
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    free_symbolic_handler, free_symbolic,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()  // symbolic
+);
+
+ffi::Error analyze(
+    const ffi::Buffer<ffi::DataType::S32> Ai,
+    const ffi::Buffer<ffi::DataType::S32> Aj,
+    const ffi::Buffer<ffi::DataType::S32> n_col_buf,
+    ffi::Result<ffi::Buffer<ffi::DataType::U64>> symbolic) {
+    if (n_col_buf.element_count() != 1) {
+        return ffi::Error::InvalidArgument("n_col must be a scalar.");
+    }
+    int n_col = *n_col_buf.typed_data();
+
+    auto ds_Ai = Ai.dimensions();
+    if (ds_Ai.size() != 1) return ffi::Error::InvalidArgument("Ai must be 1D.");
+    int n_nz = ds_Ai[0];
+
+    auto ds_Aj = Aj.dimensions();
+    if (ds_Aj.size() != 1) return ffi::Error::InvalidArgument("Aj must be 1D.");
+    if (ds_Aj[0] != n_nz) return ffi::Error::InvalidArgument("Aj size mismatch.");
+
+    const int* _Ai = Ai.typed_data();
+    const int* _Aj = Aj.typed_data();
+
+    // Validate indices
+    for (int n = 0; n < n_nz; n++) {
+        if (_Ai[n] < 0 || _Ai[n] >= n_col) return ffi::Error::InvalidArgument("Ai index out of bounds.");
+        if (_Aj[n] < 0 || _Aj[n] >= n_col) return ffi::Error::InvalidArgument("Aj index out of bounds.");
+    }
+
+    auto _Bi = std::make_unique<int[]>(n_nz);
+    auto _Bp = std::make_unique<int[]>(n_col + 1);
+    auto _Bk = std::make_unique<int[]>(n_nz);
+
+    coo_to_csc_analyze(n_col, n_nz, _Ai, _Aj, _Bi.get(), _Bp.get(), _Bk.get());
+
+    klu_common Common;
+    klu_defaults(&Common);
+    klu_symbolic* Symbolic = klu_analyze(n_col, _Bp.get(), _Bi.get(), &Common);
+
+    if (!Symbolic) {
+        return ffi::Error::Internal("klu_analyze failed.");
+    }
+
+    *symbolic->typed_data() = reinterpret_cast<uint64_t>(Symbolic);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    analyze_handler, analyze,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Ai
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Aj
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // n_col
+        .Ret<ffi::Buffer<ffi::DataType::U64>>()  // symbolic ptr
+);
+
 // Python wrappers
 PYBIND11_MODULE(klujax_cpp, m) {
     m.def("dot_f64",
@@ -375,4 +583,12 @@ PYBIND11_MODULE(klujax_cpp, m) {
           []() { return py::capsule((void*)&solve_f64_handler); });
     m.def("solve_c128",
           []() { return py::capsule((void*)&solve_c128_handler); });
+    m.def("solve_with_symbol_f64",
+          []() { return py::capsule((void*)&solve_with_symbol_f64_handler); });
+    m.def("solve_with_symbol_c128",
+          []() { return py::capsule((void*)&solve_with_symbol_c128_handler); });
+    m.def("analyze",
+          []() { return py::capsule((void*)&analyze_handler); });
+    m.def("free_symbolic",
+          []() { return py::capsule((void*)&free_symbolic_handler); });
 }
