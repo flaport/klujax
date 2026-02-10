@@ -3,6 +3,7 @@
 
 #include <cmath>
 
+#include <complex>
 #include "klu.h"
 #include "pybind11/pybind11.h"
 #include "xla/ffi/api/ffi.h"
@@ -12,7 +13,7 @@ namespace ffi = xla::ffi;
 #include <cstring>  // for memset
 #include <memory>   // for unique_ptr
 
-ffi::Error validate_dot_f64_args(
+ffi::Error validate_args(
     const ffi::Buffer<ffi::DataType::S32>& Ai,
     const ffi::Buffer<ffi::DataType::S32>& Aj,
     const ffi::AnyBuffer::Dimensions ds_Ax,
@@ -122,15 +123,41 @@ void coo_to_csc_analyze(
     }
 }
 
-ffi::Error dot_f64(
-    const ffi::Buffer<ffi::DataType::S32> Ai,
-    const ffi::Buffer<ffi::DataType::S32> Aj,
-    const ffi::Buffer<ffi::DataType::F64> Ax,
-    const ffi::Buffer<ffi::DataType::F64> x,
-    ffi::Result<ffi::Buffer<ffi::DataType::F64>> b) {
-    auto ds_x = x.dimensions();
-    auto ds_Ax = Ax.dimensions();
-    ffi::Error err = validate_dot_f64_args(Ai, Aj, ds_Ax, ds_x);
+using Complex = std::complex<double>;
+
+template <typename T>
+struct KluTraits;
+
+template <>
+struct KluTraits<double> {
+    static klu_numeric* factor(int* Ap, int* Ai, double* Ax, klu_symbolic* Symbolic, klu_common* Common) {
+        return klu_factor(Ap, Ai, Ax, Symbolic, Common);
+    }
+    static int solve(klu_symbolic* Symbolic, klu_numeric* Numeric, int d, int nrhs, double* B, klu_common* Common) {
+        return klu_solve(Symbolic, Numeric, d, nrhs, B, Common);
+    }
+};
+
+template <>
+struct KluTraits<Complex> {
+    static klu_numeric* factor(int* Ap, int* Ai, Complex* Ax, klu_symbolic* Symbolic, klu_common* Common) {
+        return klu_z_factor(Ap, Ai, reinterpret_cast<double*>(Ax), Symbolic, Common);
+    }
+    static int solve(klu_symbolic* Symbolic, klu_numeric* Numeric, int d, int nrhs, Complex* B, klu_common* Common) {
+        return klu_z_solve(Symbolic, Numeric, d, nrhs, reinterpret_cast<double*>(B), Common);
+    }
+};
+
+template <typename T>
+ffi::Error dot_impl(
+    const ffi::Buffer<ffi::DataType::S32>& Ai,
+    const ffi::Buffer<ffi::DataType::S32>& Aj,
+    const ffi::AnyBuffer::Dimensions& ds_Ax,
+    const ffi::AnyBuffer::Dimensions& ds_x,
+    const T* _Ax,
+    const T* _x,
+    T* _b) {
+    ffi::Error err = validate_args(Ai, Aj, ds_Ax, ds_x);
     if (err.failure()) {
         return err;
     }
@@ -139,11 +166,6 @@ ffi::Error dot_f64(
     int n_col = (int)ds_x[1];
     int n_rhs = (int)ds_x[2];
     int n_nz = (int)ds_Ax[1];
-    const int* _Ai = Ai.typed_data();
-    const int* _Aj = Aj.typed_data();
-    const double* _Ax = Ax.typed_data();
-    const double* _x = x.typed_data();
-    double* _b = b->typed_data();
 
     // initialize empty result
     for (int i = 0; i < n_lhs * n_col * n_rhs; i++) {
@@ -156,6 +178,8 @@ ffi::Error dot_f64(
     // Loop order: m (batch) outer for better cache locality on Ax
     int i;
     int j;
+    const int* _Ai = Ai.typed_data();
+    const int* _Aj = Aj.typed_data();
     for (int m = 0; m < n_lhs; m++) {
         for (int n = 0; n < n_nz; n++) {
             i = _Ai[n];
@@ -166,6 +190,16 @@ ffi::Error dot_f64(
         }
     }
     return ffi::Error::Success();
+}
+
+ffi::Error dot_f64(
+    const ffi::Buffer<ffi::DataType::S32> Ai,
+    const ffi::Buffer<ffi::DataType::S32> Aj,
+    const ffi::Buffer<ffi::DataType::F64> Ax,
+    const ffi::Buffer<ffi::DataType::F64> x,
+    ffi::Result<ffi::Buffer<ffi::DataType::F64>> b) {
+    return dot_impl<double>(Ai, Aj, Ax.dimensions(), x.dimensions(),
+                            Ax.typed_data(), x.typed_data(), b->typed_data());
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(  // b = A x
@@ -184,49 +218,10 @@ ffi::Error dot_c128(
     const ffi::Buffer<ffi::DataType::C128> Ax,
     const ffi::Buffer<ffi::DataType::C128> x,
     ffi::Result<ffi::Buffer<ffi::DataType::C128>> b) {
-    auto ds_x = x.dimensions();
-    auto ds_Ax = Ax.dimensions();
-    ffi::Error err = validate_dot_f64_args(Ai, Aj, ds_Ax, ds_x);
-    if (err.failure()) {
-        return err;
-    }
-    int n_lhs = (int)ds_x[0];
-    int n_col = (int)ds_x[1];
-    int n_rhs = (int)ds_x[2];
-    int n_nz = (int)ds_Ax[1];
-    const int* _Ai = Ai.typed_data();
-    const int* _Aj = Aj.typed_data();
-    const double* _Ax = (double*)Ax.typed_data();
-    const double* _x = (double*)x.typed_data();
-    double* _b = (double*)b->typed_data();
-
-    // initialize empty result
-    for (int i = 0; i < 2 * n_lhs * n_col * n_rhs; i++) {
-        _b[i] = 0.0;
-    }
-
-    // fill result (all multi-dim arrays are row-major)
-    // x_mik = A_mij × x_mjk (einsum)
-    // sizes: m<n_lhs; i<n_col<--Ai; j<n_col<--Aj; k<n_rhs
-    // Loop order: m (batch) outer for better cache locality on Ax
-    int i;
-    int j;
-    for (int m = 0; m < n_lhs; m++) {
-        for (int n = 0; n < n_nz; n++) {
-            i = _Ai[n];
-            j = _Aj[n];
-            for (int k = 0; k < n_rhs; k++) {
-                _b[2 * (m * n_col * n_rhs + i * n_rhs + k)] +=                                        // real
-                    _Ax[2 * (m * n_nz + n)] * _x[2 * (m * n_col * n_rhs + j * n_rhs + k)]             // real*real
-                    - _Ax[2 * (m * n_nz + n) + 1] * _x[2 * (m * n_col * n_rhs + j * n_rhs + k) + 1];  // imag*imag
-                _b[2 * (m * n_col * n_rhs + i * n_rhs + k) + 1] +=                                    // imag
-                    _Ax[2 * (m * n_nz + n)] * _x[2 * (m * n_col * n_rhs + j * n_rhs + k) + 1]         // real*imag
-                    + _Ax[2 * (m * n_nz + n) + 1] * _x[2 * (m * n_col * n_rhs + j * n_rhs + k)];      // imag*real
-            }
-        }
-    }
-
-    return ffi::Error::Success();
+    return dot_impl<Complex>(Ai, Aj, Ax.dimensions(), x.dimensions(),
+                             reinterpret_cast<const Complex*>(Ax.typed_data()),
+                             reinterpret_cast<const Complex*>(x.typed_data()),
+                             reinterpret_cast<Complex*>(b->typed_data()));
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(  // b = A x
@@ -239,15 +234,16 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(  // b = A x
         .Ret<ffi::Buffer<ffi::DataType::C128>>()  // b
 );
 
-ffi::Error solve_f64(
-    ffi::Buffer<ffi::DataType::S32> Ai,
-    ffi::Buffer<ffi::DataType::S32> Aj,
-    ffi::Buffer<ffi::DataType::F64> Ax,
-    ffi::Buffer<ffi::DataType::F64> b,
-    ffi::Result<ffi::Buffer<ffi::DataType::F64>> x) {
-    auto ds_b = b.dimensions();
-    auto ds_Ax = Ax.dimensions();
-    ffi::Error err = validate_dot_f64_args(Ai, Aj, ds_Ax, ds_b);
+template <typename T>
+ffi::Error solve_impl(
+    const ffi::Buffer<ffi::DataType::S32>& Ai,
+    const ffi::Buffer<ffi::DataType::S32>& Aj,
+    const ffi::AnyBuffer::Dimensions& ds_Ax,
+    const ffi::AnyBuffer::Dimensions& ds_b,
+    const T* _Ax,
+    const T* _b,
+    T* _x) {
+    ffi::Error err = validate_args(Ai, Aj, ds_Ax, ds_b);
     if (err.failure()) {
         return err;
     }
@@ -258,21 +254,18 @@ ffi::Error solve_f64(
     int n_nz = (int)ds_Ax[1];
     const int* _Ai = Ai.typed_data();
     const int* _Aj = Aj.typed_data();
-    const double* _Ax = Ax.typed_data();
-    const double* _b = b.typed_data();
-    double* _x = x->typed_data();
 
     // get COO -> CSC transformation information (using RAII for automatic cleanup)
     auto _Bk = std::make_unique<int[]>(n_nz);  // Ax -> Bx transformation indices
     auto _Bi = std::make_unique<int[]>(n_nz);
     auto _Bp = std::make_unique<int[]>(n_col + 1);
-    auto _Bx = std::make_unique<double[]>(n_nz);
+    auto _Bx = std::make_unique<T[]>(n_nz);
 
     coo_to_csc_analyze(n_col, n_nz, _Ai, _Aj, _Bi.get(), _Bp.get(), _Bk.get());
 
     // copy _b into _x_temp and transpose the last two dimensions since KLU expects col-major layout
     // _b itself won't be used anymore. KLU works on _x_temp in-place.
-    auto _x_temp = std::make_unique<double[]>(n_lhs * n_col * n_rhs);
+    auto _x_temp = std::make_unique<T[]>(n_lhs * n_col * n_rhs);
     for (int m = 0; m < n_lhs; m++) {
         for (int n = 0; n < n_col; n++) {
             for (int p = 0; p < n_rhs; p++) {
@@ -300,16 +293,16 @@ ffi::Error solve_f64(
         }
 
         // solve using KLU
-        Numeric = klu_factor(_Bp.get(), _Bi.get(), _Bx.get(), Symbolic, &Common);
+        Numeric = KluTraits<T>::factor(_Bp.get(), _Bi.get(), _Bx.get(), Symbolic, &Common);
         if (Numeric == nullptr || Common.status < KLU_OK) {
             klu_free_symbolic(&Symbolic, &Common);
-            return ffi::Error::InvalidArgument("klu_factor failed (singular matrix?)");
+            return ffi::Error::InvalidArgument("klu_factor/z_factor failed (singular matrix?)");
         }
-        klu_solve(Symbolic, Numeric, n_col, n_rhs, &_x_temp[n], &Common);
+        KluTraits<T>::solve(Symbolic, Numeric, n_col, n_rhs, &_x_temp[n], &Common);
         if (Common.status < KLU_OK) {
             klu_free_numeric(&Numeric, &Common);
             klu_free_symbolic(&Symbolic, &Common);
-            return ffi::Error::InvalidArgument("klu_solve failed");
+            return ffi::Error::InvalidArgument("klu_solve/z_solve failed");
         }
         klu_free_numeric(&Numeric, &Common);
     }
@@ -330,6 +323,16 @@ ffi::Error solve_f64(
     return ffi::Error::Success();
 }
 
+ffi::Error solve_f64(
+    ffi::Buffer<ffi::DataType::S32> Ai,
+    ffi::Buffer<ffi::DataType::S32> Aj,
+    ffi::Buffer<ffi::DataType::F64> Ax,
+    ffi::Buffer<ffi::DataType::F64> b,
+    ffi::Result<ffi::Buffer<ffi::DataType::F64>> x) {
+    return solve_impl<double>(Ai, Aj, Ax.dimensions(), b.dimensions(),
+                              Ax.typed_data(), b.typed_data(), x->typed_data());
+}
+
 XLA_FFI_DEFINE_HANDLER_SYMBOL(  // b = A x
     solve_f64_handler, solve_f64,
     ffi::Ffi::Bind()
@@ -346,90 +349,10 @@ ffi::Error solve_c128(
     const ffi::Buffer<ffi::DataType::C128> Ax,
     const ffi::Buffer<ffi::DataType::C128> b,
     ffi::Result<ffi::Buffer<ffi::DataType::C128>> x) {
-    auto ds_x = b.dimensions();
-    auto ds_Ax = Ax.dimensions();
-    ffi::Error err = validate_dot_f64_args(Ai, Aj, ds_Ax, ds_x);
-    if (err.failure()) {
-        return err;
-    }
-    int n_lhs = (int)ds_x[0];
-    int n_col = (int)ds_x[1];
-    int n_rhs = (int)ds_x[2];
-    int n_nz = (int)ds_Ax[1];
-    const int* _Ai = Ai.typed_data();
-    const int* _Aj = Aj.typed_data();
-    const double* _Ax = (double*)Ax.typed_data();
-    const double* _b = (double*)b.typed_data();
-    double* _x = (double*)x->typed_data();
-
-    // get COO -> CSC transformation information (using RAII for automatic cleanup)
-    auto _Bk = std::make_unique<int[]>(n_nz);       // Ax -> Bx transformation indices
-    auto _Bi = std::make_unique<int[]>(n_nz);       // CSC row indices
-    auto _Bp = std::make_unique<int[]>(n_col + 1);  // CSC column pointers
-    auto _Bx = std::make_unique<double[]>(2 * n_nz);
-    coo_to_csc_analyze(n_col, n_nz, _Ai, _Aj, _Bi.get(), _Bp.get(), _Bk.get());
-
-    // copy _b into _x_temp and transpose the last two dimensions since KLU expects col-major layout
-    // _b itself won't be used anymore. KLU works on _x_temp in-place.
-    auto _x_temp = std::make_unique<double[]>(2 * n_lhs * n_col * n_rhs);
-    for (int m = 0; m < n_lhs; m++) {
-        for (int n = 0; n < n_col; n++) {
-            for (int p = 0; p < n_rhs; p++) {
-                _x_temp[2 * (m * n_rhs * n_col + p * n_col + n)] = _b[2 * (m * n_col * n_rhs + n * n_rhs + p)];
-                _x_temp[2 * (m * n_rhs * n_col + p * n_col + n) + 1] = _b[2 * (m * n_col * n_rhs + n * n_rhs + p) + 1];
-            }
-        }
-    }
-
-    // initialize KLU for given sparsity pattern
-    klu_symbolic* Symbolic;
-    klu_numeric* Numeric;
-    klu_common Common;
-    klu_defaults(&Common);
-    Symbolic = klu_analyze(n_col, _Bp.get(), _Bi.get(), &Common);
-
-    // solve for all elements in batch:
-    // NOTE: same sparsity pattern for each element in batch assumed
-    for (int i = 0; i < n_lhs; i++) {
-        int m = i * n_nz;
-        int n = i * n_rhs * n_col;
-
-        // convert COO Ax to CSC Bx
-        for (int k = 0; k < n_nz; k++) {
-            _Bx[2 * k] = _Ax[2 * (m + _Bk[k])];
-            _Bx[2 * k + 1] = _Ax[2 * (m + _Bk[k]) + 1];
-        }
-
-        // solve using KLU
-        Numeric = klu_z_factor(_Bp.get(), _Bi.get(), _Bx.get(), Symbolic, &Common);
-        if (Numeric == nullptr || Common.status < KLU_OK) {
-            klu_free_symbolic(&Symbolic, &Common);
-            return ffi::Error::InvalidArgument("klu_z_factor failed (singular matrix?)");
-        }
-        klu_z_solve(Symbolic, Numeric, n_col, n_rhs, &_x_temp[2 * n], &Common);
-        if (Common.status < KLU_OK) {
-            klu_free_numeric(&Numeric, &Common);
-            klu_free_symbolic(&Symbolic, &Common);
-            return ffi::Error::InvalidArgument("klu_z_solve failed");
-        }
-        klu_free_numeric(&Numeric, &Common);
-    }
-
-    // copy _x_temp into _x and transpose the last two dimensions since JAX expects row-major layout
-    // NOTE: it feels a bit weird to have to do all this copying and transposing here. This might actually be
-    // pretty inefficient. Ideally I'd like to get rid of this transpose. Maybe just represent b/x in python
-    // as n_lhs x n_rhs x n_col in stead of n_lhs x n_col x n_rhs?
-    for (int m = 0; m < n_lhs; m++) {
-        for (int n = 0; n < n_col; n++) {
-            for (int p = 0; p < n_rhs; p++) {
-                _x[2 * (m * n_col * n_rhs + n * n_rhs + p)] = _x_temp[2 * (m * n_rhs * n_col + p * n_col + n)];
-                _x[2 * (m * n_col * n_rhs + n * n_rhs + p) + 1] = _x_temp[2 * (m * n_rhs * n_col + p * n_col + n) + 1];
-            }
-        }
-    }
-
-    klu_free_symbolic(&Symbolic, &Common);
-    return ffi::Error::Success();
+    return solve_impl<Complex>(Ai, Aj, Ax.dimensions(), b.dimensions(),
+                               reinterpret_cast<const Complex*>(Ax.typed_data()),
+                               reinterpret_cast<const Complex*>(b.typed_data()),
+                               reinterpret_cast<Complex*>(x->typed_data()));
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(  // b = A x
