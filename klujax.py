@@ -169,8 +169,14 @@ class KLUHandleManager:
 
     def close(self) -> None:
         """Release the C++ resource if this instance is the owner."""
+        # Safety check: If the interpreter is shutting down, 'jax' might be None.
+        # If so, we can simply return, as the OS will reclaim the memory momentarily.
+        if jax is None:
+            return
+
         if self._freed or isinstance(self.handle, jax.core.Tracer):
             return
+
         if self._owner and self.free_callable:
             try:
                 self.free_callable(self.handle)
