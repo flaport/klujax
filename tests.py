@@ -349,27 +349,68 @@ def _is_almost_equal(arr1, arr2):
         return False
     else:
         return True
-    
+
 def test_solve_with_symbol_jvp():
 
     Ai = jnp.array([0, 1], dtype=jnp.int32)
     Aj = jnp.array([0, 1], dtype=jnp.int32)
     Ax = jnp.array([2.0, 4.0], dtype=jnp.float64) # Values
     b = jnp.array([10.0, 20.0], dtype=jnp.float64)
-    
+
     # Pre-compute symbolic factorization
     n_col = 2
     symbolic = klujax.analyze(Ai, Aj, n_col)
-    
+
     def solve_step(Ax_vals, b_vec):
         return klujax.solve_with_symbol(Ai, Aj, Ax_vals, b_vec, symbolic)
 
     # Tangents (perturbations)
     tangent_Ax = jnp.array([0.1, 0.1], dtype=jnp.float64)
     tangent_b = jnp.array([0.0, 0.0], dtype=jnp.float64)
-    
+
     # This triggers the JVP rule lookup
     primals, tangents = jax.jvp(solve_step, (Ax, b), (tangent_Ax, tangent_b))
-    assert primals.shape == (2,)
-    assert tangents.shape == (2,)
-    
+    assert primals.shape == (2,)  # noqa: S101
+    assert tangents.shape == (2,)  # noqa: S101
+
+
+# KLUHandleManager testing
+
+def use_handle(manager, x):
+    """Simulates any function requiring a concrete handle (e.g. a C pointer)."""
+    assert not isinstance(manager.handle, jax.core.Tracer), (
+        "Handle was traced! Got a Tracer instead of a concrete value."
+    )
+    return x * 2.0
+
+def test_registration_traces_handle():
+
+    manager = klujax.KLUHandleManager(jnp.array(0xDEADBEEF, dtype=jnp.int64),
+                                      free_callable=lambda x: None)
+
+    fn = jax.jit(use_handle)
+    result = fn(manager, jnp.array(1.0))
+    assert jnp.allclose(result, 2.0)
+
+def test_registration_handle_concrete_under_grad():
+    manager = klujax.KLUHandleManager(jnp.array(0xDEADBEEF, dtype=jnp.int64),
+                                      free_callable=lambda x: None)
+    fn = jax.grad(lambda x: use_handle(manager, x))
+    fn(jnp.array(1.0))
+
+def test_handle_survives_pytree_roundtrip():
+    handle_val = jnp.array(0xDEADBEEF, dtype=jnp.int64)
+    manager = klujax.KLUHandleManager(handle_val, free_callable=lambda x: None)
+
+    leaves, treedef = jax.tree_util.tree_flatten(manager)
+    reconstructed = treedef.unflatten(leaves)
+
+    assert leaves == []
+    assert int(reconstructed.handle) == int(handle_val)
+
+def test_registration_handle_concrete_under_vmap():
+    manager = klujax.KLUHandleManager(jnp.array(0xDEADBEEF, dtype=jnp.int64),
+                                      free_callable=lambda x: None)
+    fn = jax.vmap(lambda x: use_handle(manager, x))
+    result = fn(jnp.ones((4,)))
+    assert jnp.allclose(result, 2.0)

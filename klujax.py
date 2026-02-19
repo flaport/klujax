@@ -199,12 +199,14 @@ class KLUHandleManager:
         if hasattr(self, "close"):
             self.close()
 
-def _klu_flatten(obj: KLUHandleManager) -> Tuple[Tuple[Array], Tuple[Callable]]:
-    return (obj.handle,), (obj.free_callable,)
+def _klu_flatten(obj: KLUHandleManager) -> tuple[tuple[()], tuple[Array, Callable]]:
+    # No leaves — handle and callable are both static aux data
+    return (), (obj.handle, obj.free_callable)
 
-def _klu_unflatten(aux: Tuple[Callable], children: Tuple[Array]) -> KLUHandleManager:
-    # JAX-reconstructed objects are marked as non-owners to prevent double-free.
-    return KLUHandleManager(children[0], free_callable=aux[0], owner=False)
+
+def _klu_unflatten(aux: tuple[Array, Callable], children: tuple[()]) -> KLUHandleManager:
+    handle, free_callable = aux
+    return KLUHandleManager(handle, free_callable=free_callable, owner=False)
 
 jax.tree_util.register_pytree_node(KLUHandleManager, _klu_flatten, _klu_unflatten)
 
