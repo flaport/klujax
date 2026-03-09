@@ -350,6 +350,147 @@ def _is_almost_equal(arr1, arr2):
     else:
         return True
 
+def _make_ax2(Ai, Aj, Ax, *, dtype, seed=42):
+    """New Ax values with the same sparsity pattern as Ax, with a strong diagonal."""
+    Ax_raw = jax.random.normal(jax.random.PRNGKey(seed), Ax.shape, dtype=dtype)
+    # Ensure diagonal entries are large (invertible) — Ai[k]==Aj[k] marks diagonal positions
+    if Ax_raw.ndim == 1:
+        Ax_raw = Ax_raw + jnp.where(Ai == Aj, jnp.full_like(Ax_raw, 10.0), jnp.zeros_like(Ax_raw))
+    else:  # (n_lhs, n_nz) batch case
+        diag_mask = (Ai == Aj)[None, :]
+        Ax_raw = Ax_raw + jnp.where(diag_mask, jnp.full_like(Ax_raw, 10.0), jnp.zeros_like(Ax_raw))
+    return Ax_raw
+
+
+@log_test_name
+@parametrize_dtypes
+def test_refactor(dtype):
+    Ai, Aj, Ax, b = _get_rand_arrs_1d(15, (n_col := 5), dtype=dtype)
+    Ax2 = _make_ax2(Ai, Aj, Ax, dtype=dtype)
+    b2 = jax.random.normal(jax.random.PRNGKey(43), b.shape, dtype=dtype)
+
+    sym = klujax.analyze(Ai, Aj, n_col)
+    num = klujax.factor(Ai, Aj, Ax, sym)
+
+    num2 = klujax.refactor(Ai, Aj, Ax2, num, sym)
+    assert isinstance(num2, klujax.KLUHandleManager)
+
+    x_sp = klujax.solve_with_numeric(num2, b2, sym)
+    A2 = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax2)
+    x = jsp.linalg.solve(A2, b2)
+    _log_and_test_equality(x, x_sp)
+
+    klujax.free_numeric(num)
+    klujax.free_symbolic(sym)
+
+
+@log_test_name
+@parametrize_dtypes
+def test_refactor_batched(dtype):
+    Ai, Aj, Ax, b = _get_rand_arrs_2d((n_lhs := 3), 15, (n_col := 5), dtype=dtype)
+    Ax2 = _make_ax2(Ai, Aj, Ax, dtype=dtype)
+    b2 = jax.random.normal(jax.random.PRNGKey(43), b.shape, dtype=dtype)
+
+    sym = klujax.analyze(Ai, Aj, n_col)
+    num = klujax.factor(Ai, Aj, Ax, sym)
+
+    num2 = klujax.refactor(Ai, Aj, Ax2, num, sym)
+    assert isinstance(num2, klujax.KLUHandleManager)
+
+    x_sp = klujax.solve_with_numeric(num2, b2, sym)
+    op_dense = jax.vmap(jsp.linalg.solve, (0, 0), 0)
+    A2 = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax2)
+    x = op_dense(A2, b2)
+    _log_and_test_equality(x, x_sp)
+
+    klujax.free_numeric(num)
+    klujax.free_symbolic(sym)
+
+
+@log_test_name
+@parametrize_dtypes
+def test_refactor_vmap(dtype):
+    """vmap solve_with_symbol over n_rhs with shared sym used by refactor.
+
+    Tests that vmap composes correctly with the symbolic analysis after refactor,
+    and that refactor does not corrupt the symbolic object.
+    """
+    Ai, Aj, Ax, b = _get_rand_arrs_3d((n_lhs := 3), 15, (n_col := 5), 4, dtype=dtype)
+    Ax2 = _make_ax2(Ai, Aj, Ax, dtype=dtype)
+
+    sym = klujax.analyze(Ai, Aj, n_col)
+    num = klujax.factor(Ai, Aj, Ax, sym)
+    num2 = klujax.refactor(Ai, Aj, Ax2, num, sym)
+
+    # vmap solve_with_symbol over n_rhs axis (same pattern as test_3d_vmap)
+    x_sp = jax.vmap(
+        klujax.solve_with_symbol, (None, None, None, -1, None), -1
+    )(Ai, Aj, Ax2, b, sym)
+
+    A2 = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax2)
+    x = jax.vmap(jax.vmap(jsp.linalg.solve, (0, 0), 0), (None, -1), -1)(A2, b)
+    _log_and_test_equality(x, x_sp)
+
+    klujax.free_numeric(num2)
+    klujax.free_symbolic(sym)
+
+
+@log_test_name
+@parametrize_dtypes
+def test_refactor_pmap(dtype):
+    """pmap solve_with_numeric across devices after refactor."""
+    n_dev = jax.device_count()
+    Ai, Aj, Ax, _ = _get_rand_arrs_1d(15, (n_col := 5), dtype=dtype)
+    Ax2 = _make_ax2(Ai, Aj, Ax, dtype=dtype)
+    B = jax.random.normal(jax.random.PRNGKey(77), (n_dev, n_col), dtype=dtype)
+
+    sym = klujax.analyze(Ai, Aj, n_col)
+    num = klujax.factor(Ai, Aj, Ax, sym)
+    num2 = klujax.refactor(Ai, Aj, Ax2, num, sym)
+
+    x_sp = jax.pmap(lambda b: klujax.solve_with_numeric(num2, b, sym))(B)
+
+    A2 = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax2)
+    x = jax.vmap(lambda b: jsp.linalg.solve(A2, b))(B)
+    _log_and_test_equality(x, x_sp)
+
+    klujax.free_numeric(num2)
+    klujax.free_symbolic(sym)
+
+
+@log_test_name
+@parametrize_dtypes
+def test_refactor_grad(dtype):
+    """AD through solve_with_symbol is unaffected by refactor on the shared symbolic analysis."""
+    Ai, Aj, Ax, _ = _get_rand_arrs_1d(15, (n_col := 5), dtype=dtype)
+    Ax2 = _make_ax2(Ai, Aj, Ax, dtype=dtype)
+    b2 = jax.random.normal(jax.random.PRNGKey(43), (n_col,), dtype=dtype)
+    holomorphic = dtype in COMPLEX_DTYPES
+
+    sym = klujax.analyze(Ai, Aj, n_col)
+    num = klujax.factor(Ai, Aj, Ax, sym)
+    num2 = klujax.refactor(Ai, Aj, Ax2, num, sym)
+
+    # refactor value and solve_with_symbol value must agree
+    x_num = klujax.solve_with_numeric(num2, b2, sym)
+    x_sym = klujax.solve_with_symbol(Ai, Aj, Ax2, b2, sym)
+    _log_and_test_equality(x_num, x_sym)
+
+    # jacfwd through solve_with_symbol w.r.t. Ax: tests that sym is not corrupted by refactor
+    jac_sp = jax.jacfwd(
+        lambda ax: klujax.solve_with_symbol(Ai, Aj, ax, b2, sym),
+        holomorphic=holomorphic,
+    )(Ax2)
+    jac_dense = jax.jacfwd(
+        lambda ax: jnp.linalg.solve(jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(ax), b2),
+        holomorphic=holomorphic,
+    )(Ax2)
+    _log_and_test_equality(jac_sp, jac_dense)
+
+    klujax.free_numeric(num2)
+    klujax.free_symbolic(sym)
+
+
 def test_solve_with_symbol_jvp():
 
     Ai = jnp.array([0, 1], dtype=jnp.int32)

@@ -4,7 +4,7 @@
 
 __version__ = "0.4.8"
 __author__ = "Floris Laporte"
-__all__ = ["analyze", "coalesce", "dot", "factor", "free_numeric", "free_symbolic", "solve", "solve_with_numeric", "solve_with_symbol"]
+__all__ = ["analyze", "coalesce", "dot", "factor", "free_numeric", "free_symbolic", "refactor", "solve", "solve_with_numeric", "solve_with_symbol"]
 
 # Imports =============================================================================
 
@@ -380,6 +380,40 @@ def factor(Ai: Array, Aj: Array, Ax: Array, symbolic: Union[KLUHandleManager, Ar
     return KLUHandleManager(raw_numeric, free_numeric, owner=True)
 
 @jax.jit
+def _refactor_jit(Ai: Array, Aj: Array, Ax: Array, sym_h: Array, num_h: Array) -> Array:
+    dummy_b = jnp.zeros((1,), dtype=Ax.dtype)
+    Ai, Aj, Ax, _, _ = validate_args(Ai, Aj, Ax, dummy_b)
+    prim = refactor_c128 if Ax.dtype in COMPLEX_DTYPES else refactor_f64
+    return prim.bind(Ai, Aj, Ax, sym_h, num_h)
+
+def refactor(Ai: Array, Aj: Array, Ax: Array, numeric: Union[KLUHandleManager, Array], symbolic: Union[KLUHandleManager, Array]) -> KLUHandleManager:
+    """Re-factorize matrix A numerically, reusing the symbolic analysis.
+
+    Use when the sparsity pattern is unchanged but values have changed.
+    Modifies the numeric factorization in-place. Faster than calling factor().
+
+    Returns a KLUHandleManager holding the same underlying pointer as the input
+    numeric handle. The returned handle must be threaded into subsequent
+    solve_with_numeric calls so that XLA/JAX sees the dependency edge:
+    factor → refactor → solve.
+
+    Args:
+        Ai: [n_nz; int32]: the row indices of the sparse matrix A
+        Aj: [n_nz; int32]: the column indices of the sparse matrix A
+        Ax: [n_lhs? x n_nz; float64|complex128]: the values of the sparse matrix A
+        numeric: [KLUHandleManager|Array]: existing numeric factorization (modified in-place)
+        symbolic: [KLUHandleManager|Array]: the symbolic analysis object or handle
+
+    Returns:
+        numeric: [KLUHandleManager]: the updated numeric handle (same pointer, for XLA dep tracking)
+
+    """
+    num_h = getattr(numeric, "handle", numeric)
+    sym_h = getattr(symbolic, "handle", symbolic)
+    raw_handle = _refactor_jit(Ai, Aj, Ax, sym_h, num_h)
+    return KLUHandleManager(raw_handle, free_numeric, owner=False)
+
+@jax.jit
 def _solve_with_numeric_jit(num_h: Array, b: Array, sym_h: Array) -> Array:
     prim = solve_with_numeric_c128 if b.dtype in COMPLEX_DTYPES else solve_with_numeric_f64
     return prim.bind(sym_h.astype(jnp.uint64), num_h.astype(jnp.uint64), b)
@@ -421,6 +455,8 @@ factor_c128 = jax.extend.core.Primitive("factor_c128")
 solve_with_numeric_f64 = jax.extend.core.Primitive("solve_with_numeric_f64")
 solve_with_numeric_c128 = jax.extend.core.Primitive("solve_with_numeric_c128")
 free_numeric_p = jax.extend.core.Primitive("free_numeric")
+refactor_f64 = jax.extend.core.Primitive("refactor_f64")
+refactor_c128 = jax.extend.core.Primitive("refactor_c128")
 
 # Implementations =====================================================================
 
@@ -471,6 +507,18 @@ def factor_c128_impl(Ai, Aj, Ax, symbolic):
     n_lhs = Ax.shape[0]
     call = jax.ffi.ffi_call("factor_c128", jax.ShapeDtypeStruct((n_lhs,), jnp.uint64))
     return call(Ai, Aj, Ax, symbolic)
+
+@refactor_f64.def_impl
+def refactor_f64_impl(Ai, Aj, Ax, symbolic, numeric):
+    n_lhs = Ax.shape[0]
+    call = jax.ffi.ffi_call("refactor_f64", jax.ShapeDtypeStruct((n_lhs,), jnp.uint64))
+    return call(Ai, Aj, Ax, symbolic, numeric)
+
+@refactor_c128.def_impl
+def refactor_c128_impl(Ai, Aj, Ax, symbolic, numeric):
+    n_lhs = Ax.shape[0]
+    call = jax.ffi.ffi_call("refactor_c128", jax.ShapeDtypeStruct((n_lhs,), jnp.uint64))
+    return call(Ai, Aj, Ax, symbolic, numeric)
 
 @solve_with_numeric_f64.def_impl
 def solve_with_numeric_f64_impl(symbolic, numeric, b):
@@ -598,6 +646,14 @@ jax.ffi.register_ffi_target("factor_c128", klujax_cpp.factor_c128(), platform="c
 factor_c128_low = mlir.lower_fun(factor_c128_impl, multiple_results=False)
 mlir.register_lowering(factor_c128, factor_c128_low)
 
+jax.ffi.register_ffi_target("refactor_f64", klujax_cpp.refactor_f64(), platform="cpu")
+refactor_f64_low = mlir.lower_fun(refactor_f64_impl, multiple_results=False)
+mlir.register_lowering(refactor_f64, refactor_f64_low)
+
+jax.ffi.register_ffi_target("refactor_c128", klujax_cpp.refactor_c128(), platform="cpu")
+refactor_c128_low = mlir.lower_fun(refactor_c128_impl, multiple_results=False)
+mlir.register_lowering(refactor_c128, refactor_c128_low)
+
 jax.ffi.register_ffi_target("solve_with_numeric_f64", klujax_cpp.solve_with_numeric_f64(), platform="cpu")
 solve_with_numeric_f64_low = mlir.lower_fun(solve_with_numeric_f64_impl, multiple_results=False)
 mlir.register_lowering(solve_with_numeric_f64, solve_with_numeric_f64_low)
@@ -637,6 +693,11 @@ def free_symbolic_abstract_eval(symbolic: Array) -> None:  # noqa: ARG001
 @factor_f64.def_abstract_eval
 @factor_c128.def_abstract_eval
 def factor_abstract_eval(Ai, Aj, Ax, symbolic):
+    return ShapedArray((Ax.shape[0],), jnp.uint64)
+
+@refactor_f64.def_abstract_eval
+@refactor_c128.def_abstract_eval
+def refactor_abstract_eval(Ai, Aj, Ax, symbolic, numeric):
     return ShapedArray((Ax.shape[0],), jnp.uint64)
 
 @solve_with_numeric_f64.def_abstract_eval

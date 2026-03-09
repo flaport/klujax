@@ -134,6 +134,9 @@ struct KluTraits<double> {
     static klu_numeric* factor(int* Ap, int* Ai, double* Ax, klu_symbolic* Symbolic, klu_common* Common) {
         return klu_factor(Ap, Ai, Ax, Symbolic, Common);
     }
+    static int refactor(int* Ap, int* Ai, double* Ax, klu_symbolic* Symbolic, klu_numeric* Numeric, klu_common* Common) {
+        return klu_refactor(Ap, Ai, Ax, Symbolic, Numeric, Common);
+    }
     static int solve(klu_symbolic* Symbolic, klu_numeric* Numeric, int d, int nrhs, double* B, klu_common* Common) {
         return klu_solve(Symbolic, Numeric, d, nrhs, B, Common);
     }
@@ -143,6 +146,9 @@ template <>
 struct KluTraits<Complex> {
     static klu_numeric* factor(int* Ap, int* Ai, Complex* Ax, klu_symbolic* Symbolic, klu_common* Common) {
         return klu_z_factor(Ap, Ai, reinterpret_cast<double*>(Ax), Symbolic, Common);
+    }
+    static int refactor(int* Ap, int* Ai, Complex* Ax, klu_symbolic* Symbolic, klu_numeric* Numeric, klu_common* Common) {
+        return klu_z_refactor(Ap, Ai, reinterpret_cast<double*>(Ax), Symbolic, Numeric, Common);
     }
     static int solve(klu_symbolic* Symbolic, klu_numeric* Numeric, int d, int nrhs, Complex* B, klu_common* Common) {
         return klu_z_solve(Symbolic, Numeric, d, nrhs, reinterpret_cast<double*>(B), Common);
@@ -594,6 +600,108 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 
 template <typename T>
+ffi::Error refactor_impl(
+    const ffi::Buffer<ffi::DataType::S32>& Ai,
+    const ffi::Buffer<ffi::DataType::S32>& Aj,
+    const ffi::AnyBuffer::Dimensions& ds_Ax,
+    const ffi::Buffer<ffi::DataType::U64>& symbolic,
+    const ffi::Buffer<ffi::DataType::U64>& numeric,
+    const T* _Ax,
+    uint64_t* _out_numeric) {
+    if (symbolic.element_count() != 1) return ffi::Error::InvalidArgument("symbolic must be scalar");
+    uint64_t sym_addr = *symbolic.typed_data();
+    if (sym_addr == 0) return ffi::Error::InvalidArgument("symbolic pointer is null");
+    klu_symbolic* Symbolic = reinterpret_cast<klu_symbolic*>(sym_addr);
+
+    int n_lhs = (int)ds_Ax[0];
+    int n_nz = (int)ds_Ax[1];
+    int n_col = Symbolic->n;
+
+    if (Ai.dimensions().size() != 1 || Aj.dimensions().size() != 1) return ffi::Error::InvalidArgument("Ai/Aj must be 1D");
+    if (Ai.dimensions()[0] != n_nz || Aj.dimensions()[0] != n_nz) return ffi::Error::InvalidArgument("Ai/Aj size mismatch with Ax");
+    if ((int)numeric.element_count() != n_lhs) return ffi::Error::InvalidArgument("numeric array size must match n_lhs");
+
+    const int* _Ai = Ai.typed_data();
+    const int* _Aj = Aj.typed_data();
+    const uint64_t* _numeric = numeric.typed_data();
+
+    // get COO -> CSC transformation information
+    auto _Bk = std::make_unique<int[]>(n_nz);
+    auto _Bi = std::make_unique<int[]>(n_nz);
+    auto _Bp = std::make_unique<int[]>(n_col + 1);
+    auto _Bx = std::make_unique<T[]>(n_nz);
+
+    coo_to_csc_analyze(n_col, n_nz, _Ai, _Aj, _Bi.get(), _Bp.get(), _Bk.get());
+
+    klu_common Common;
+    klu_defaults(&Common);
+
+    for (int i = 0; i < n_lhs; i++) {
+        uint64_t num_addr = _numeric[i];
+        if (num_addr == 0) return ffi::Error::InvalidArgument("numeric pointer is null");
+        klu_numeric* Numeric = reinterpret_cast<klu_numeric*>(num_addr);
+
+        int m = i * n_nz;
+        // convert COO Ax to CSC Bx
+        for (int k = 0; k < n_nz; k++) {
+            _Bx[k] = _Ax[m + _Bk[k]];
+        }
+
+        int status = KluTraits<T>::refactor(_Bp.get(), _Bi.get(), _Bx.get(), Symbolic, Numeric, &Common);
+        if (!status || Common.status < KLU_OK) {
+            return ffi::Error::InvalidArgument("klu_refactor/z_refactor failed (singular matrix?)");
+        }
+        // Pass through the same pointer so XLA sees a data dependency: refactor → solve
+        _out_numeric[i] = num_addr;
+    }
+    return ffi::Error::Success();
+}
+
+ffi::Error refactor_f64(
+    const ffi::Buffer<ffi::DataType::S32> Ai,
+    const ffi::Buffer<ffi::DataType::S32> Aj,
+    const ffi::Buffer<ffi::DataType::F64> Ax,
+    const ffi::Buffer<ffi::DataType::U64> symbolic,
+    const ffi::Buffer<ffi::DataType::U64> numeric,
+    ffi::Result<ffi::Buffer<ffi::DataType::U64>> out_numeric) {
+    return refactor_impl<double>(Ai, Aj, Ax.dimensions(), symbolic, numeric, Ax.typed_data(), out_numeric->typed_data());
+}
+
+ffi::Error refactor_c128(
+    const ffi::Buffer<ffi::DataType::S32> Ai,
+    const ffi::Buffer<ffi::DataType::S32> Aj,
+    const ffi::Buffer<ffi::DataType::C128> Ax,
+    const ffi::Buffer<ffi::DataType::U64> symbolic,
+    const ffi::Buffer<ffi::DataType::U64> numeric,
+    ffi::Result<ffi::Buffer<ffi::DataType::U64>> out_numeric) {
+    return refactor_impl<Complex>(Ai, Aj, Ax.dimensions(), symbolic, numeric,
+                                  reinterpret_cast<const Complex*>(Ax.typed_data()),
+                                  out_numeric->typed_data());
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    refactor_f64_handler, refactor_f64,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Ai
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Aj
+        .Arg<ffi::Buffer<ffi::DataType::F64>>()  // Ax
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()  // symbolic
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()  // numeric (input handles)
+        .Ret<ffi::Buffer<ffi::DataType::U64>>()  // out_numeric (same handles, for XLA dep edge)
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    refactor_c128_handler, refactor_c128,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Ai
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Aj
+        .Arg<ffi::Buffer<ffi::DataType::C128>>()  // Ax
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()  // symbolic
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()  // numeric (input handles)
+        .Ret<ffi::Buffer<ffi::DataType::U64>>()  // out_numeric (same handles, for XLA dep edge)
+);
+
+template <typename T>
 ffi::Error solve_with_numeric_impl(
     const ffi::AnyBuffer::Dimensions& ds_b,
     const ffi::AnyBuffer::Dimensions& ds_x,
@@ -882,4 +990,8 @@ PYBIND11_MODULE(klujax_cpp, m) {
           []() { return py::capsule((void*)&analyze_handler); });
     m.def("free_symbolic",
           []() { return py::capsule((void*)&free_symbolic_handler); });
+    m.def("refactor_f64",
+          []() { return py::capsule((void*)&refactor_f64_handler); });
+    m.def("refactor_c128",
+          []() { return py::capsule((void*)&refactor_c128_handler); });
 }
