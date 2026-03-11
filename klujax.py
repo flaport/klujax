@@ -1051,49 +1051,44 @@ def general_vmap_with_numeric(
     
     # numeric and b should batch together
     if anumeric is not None and ab is not None:
-        # Both numeric and b are batched - they should batch along the same dimension
-        if numeric.ndim != 2 or b.ndim != 3:
+        if numeric.ndim != 2 or b.ndim < 2:
             msg = (
-                "numeric and b should be 2D and 3D respectively when vectorizing "
+                "numeric should be 2D and b should be at least 2D when vectorizing "
                 f"over them simultaneously. Got: {numeric.shape=}; {b.shape=}."
             )
             raise ValueError(msg)
-        # Move batch axes to the front
         numeric = jnp.moveaxis(numeric, anumeric, 0)
         b = jnp.moveaxis(b, ab, 0)
         shape = b.shape
-        # Flatten the batch dimension with the matrix dimension
-        numeric = numeric.reshape(numeric.shape[0] * numeric.shape[1])
-        b = b.reshape(b.shape[0] * b.shape[1], b.shape[2])
+        batch = shape[0]
+        numeric = numeric.reshape(batch * numeric.shape[1])
+        if b.ndim >= 3:
+            b = b.reshape(batch * b.shape[1], *b.shape[2:])
+        # b.ndim == 2: shape is (batch, n) — pass directly, matches multi-LHS convention
         result = prim.bind(symbolic, numeric, b)
-        # Reshape back to include the batch dimension
         return result.reshape(*shape), 0
-    
+
     if anumeric is not None:
-        # Only numeric is batched
-        if numeric.ndim != 2 or b.ndim != 2:
-            msg = (
-                "numeric and b should be 2D when vectorizing over numeric. "
-                f"Got: {numeric.shape=}; {b.shape=}."
-            )
+        if numeric.ndim != 2:
+            msg = f"numeric should be 2D when vectorizing over it. Got: {numeric.shape=}."
             raise ValueError(msg)
         numeric = jnp.moveaxis(numeric, anumeric, 0)
-        # Broadcast b to match the batch dimension
-        b = jnp.broadcast_to(b[None], (numeric.shape[0], b.shape[0], b.shape[1]))
+        batch = numeric.shape[0]
+        b = jnp.broadcast_to(b[None], (batch, *b.shape))
         shape = b.shape
-        numeric = numeric.reshape(numeric.shape[0] * numeric.shape[1])
-        b = b.reshape(b.shape[0] * b.shape[1], b.shape[2])
+        numeric = numeric.reshape(batch * numeric.shape[1])
+        if b.ndim >= 3:
+            b = b.reshape(batch * b.shape[1], *b.shape[2:])
+        # b.ndim == 2: shape is (batch, n) — pass directly
         return prim.bind(symbolic, numeric, b).reshape(*shape), 0
-    
+
     if ab is not None:
-        # Only b is batched
-        if b.ndim != 3:
-            msg = f"b should be 3D when vectorizing over it. Got: {b.shape=}."
-            raise ValueError(msg)
-        b = jnp.moveaxis(b, ab, 2)
+        b = jnp.moveaxis(b, ab, -1)
         shape = b.shape
-        b = b.reshape(b.shape[0], b.shape[1] * b.shape[2])
-        return prim.bind(symbolic, numeric, b).reshape(*shape), 2
+        if b.ndim >= 3:
+            b = b.reshape(*b.shape[:-2], b.shape[-2] * b.shape[-1])
+        # b.ndim == 2: shape is (n, batch) — pass directly as multi-RHS
+        return prim.bind(symbolic, numeric, b).reshape(*shape), len(shape) - 1
     
     msg = "vmap failed. Please select an axis to vectorize over."
     raise ValueError(msg)

@@ -267,6 +267,33 @@ def test_solve_with_numeric_batched(dtype):
     klujax.free_numeric(numeric)
     klujax.free_symbolic(symbolic)
 
+
+@log_test_name
+@parametrize_dtypes
+def test_solve_with_numeric_vmap_1d_b(dtype):
+    """vmap over solve_with_numeric where b is 1D (single-system, single-RHS)."""
+    Ai, Aj, Ax, b = _get_rand_arrs_1d(15, (n_col := 5), dtype=dtype)
+    symbolic = klujax.analyze(Ai, Aj, n_col)
+
+    # Create a batch of different Ax values (different matrix values, same sparsity)
+    key = jax.random.PRNGKey(42)
+    batch = 4
+    Ax_batch = jax.random.normal(key, (batch, *Ax.shape), dtype=dtype) + 10.0
+
+    def solve_one(Ax_i):
+        num = klujax.factor(Ai, Aj, Ax_i, symbolic)
+        return klujax.solve_with_numeric(num, b, symbolic)
+
+    x_sp = jax.vmap(solve_one)(Ax_batch)
+
+    # Dense reference
+    A_batch = jnp.zeros((batch, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax_batch)
+    x = jax.vmap(lambda A: jsp.linalg.solve(A, b))(A_batch)
+    _log_and_test_equality(x, x_sp)
+
+    klujax.free_symbolic(symbolic)
+
+
 def _get_rand_arrs_1d(n_nz, n_col, *, dtype, seed=33):
     Axkey, Aikey, Ajkey, bkey = jax.random.split(jax.random.PRNGKey(seed), 4)
     Ai = jax.random.randint(Aikey, (n_nz,), 0, n_col, jnp.int32)
