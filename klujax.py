@@ -871,6 +871,46 @@ def solve_with_numeric_c128_vmap(
 batching.primitive_batchers[solve_with_numeric_c128] = solve_with_numeric_c128_vmap
 
 
+def factor_f64_vmap(
+    vector_arg_values: tuple[Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    return general_vmap_factor(factor_f64, vector_arg_values, batch_axes)
+
+
+batching.primitive_batchers[factor_f64] = factor_f64_vmap
+
+
+def factor_c128_vmap(
+    vector_arg_values: tuple[Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    return general_vmap_factor(factor_c128, vector_arg_values, batch_axes)
+
+
+batching.primitive_batchers[factor_c128] = factor_c128_vmap
+
+
+def refactor_f64_vmap(
+    vector_arg_values: tuple[Array, Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    return general_vmap_refactor(refactor_f64, vector_arg_values, batch_axes)
+
+
+batching.primitive_batchers[refactor_f64] = refactor_f64_vmap
+
+
+def refactor_c128_vmap(
+    vector_arg_values: tuple[Array, Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    return general_vmap_refactor(refactor_c128, vector_arg_values, batch_axes)
+
+
+batching.primitive_batchers[refactor_c128] = refactor_c128_vmap
+
+
 def general_vmap(
     prim: jax.extend.core.Primitive,
     vector_arg_values: tuple[Array, Array, Array, Array],
@@ -1055,6 +1095,99 @@ def general_vmap_with_numeric(
         b = b.reshape(b.shape[0], b.shape[1] * b.shape[2])
         return prim.bind(symbolic, numeric, b).reshape(*shape), 2
     
+    msg = "vmap failed. Please select an axis to vectorize over."
+    raise ValueError(msg)
+
+
+def general_vmap_factor(
+    prim: jax.extend.core.Primitive,
+    vector_arg_values: tuple[Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    Ai, Aj, Ax, symbolic = vector_arg_values
+    aAi, aAj, aAx, asymbolic = batch_axes
+
+    if aAi is not None:
+        msg = "Ai cannot be vectorized."
+        raise ValueError(msg)
+
+    if aAj is not None:
+        msg = "Aj cannot be vectorized."
+        raise ValueError(msg)
+
+    if asymbolic is not None:
+        msg = "symbolic handle cannot be vectorized."
+        raise ValueError(msg)
+
+    if aAx is not None:
+        if Ax.ndim != 3:
+            msg = f"Ax should be 3D when vectorizing over it. Got: {Ax.shape=}."
+            raise ValueError(msg)
+        Ax = jnp.moveaxis(Ax, aAx, 0)
+        batch, n_lhs, n_vals = Ax.shape
+        Ax = Ax.reshape(batch * n_lhs, n_vals)
+        return prim.bind(Ai, Aj, Ax, symbolic).reshape(batch, n_lhs), 0
+
+    msg = "vmap failed. Please select an axis to vectorize over."
+    raise ValueError(msg)
+
+
+def general_vmap_refactor(
+    prim: jax.extend.core.Primitive,
+    vector_arg_values: tuple[Array, Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    Ai, Aj, Ax, symbolic, numeric = vector_arg_values
+    aAi, aAj, aAx, asymbolic, anumeric = batch_axes
+
+    if aAi is not None:
+        msg = "Ai cannot be vectorized."
+        raise ValueError(msg)
+
+    if aAj is not None:
+        msg = "Aj cannot be vectorized."
+        raise ValueError(msg)
+
+    if asymbolic is not None:
+        msg = "symbolic handle cannot be vectorized."
+        raise ValueError(msg)
+
+    if aAx is not None and anumeric is not None:
+        if Ax.ndim != 3 or numeric.ndim != 2:
+            msg = (
+                "Ax and numeric should be 3D and 2D respectively when vectorizing "
+                f"over them simultaneously. Got: {Ax.shape=}; {numeric.shape=}."
+            )
+            raise ValueError(msg)
+        Ax = jnp.moveaxis(Ax, aAx, 0)
+        numeric = jnp.moveaxis(numeric, anumeric, 0)
+        batch, n_lhs, n_vals = Ax.shape
+        Ax = Ax.reshape(batch * n_lhs, n_vals)
+        numeric = numeric.reshape(batch * n_lhs)
+        return prim.bind(Ai, Aj, Ax, symbolic, numeric).reshape(batch, n_lhs), 0
+
+    if aAx is not None:
+        if Ax.ndim != 3:
+            msg = f"Ax should be 3D when vectorizing over it. Got: {Ax.shape=}."
+            raise ValueError(msg)
+        Ax = jnp.moveaxis(Ax, aAx, 0)
+        batch, n_lhs, n_vals = Ax.shape
+        numeric = jnp.broadcast_to(numeric[None], (batch, numeric.shape[0]))
+        Ax = Ax.reshape(batch * n_lhs, n_vals)
+        numeric = numeric.reshape(batch * n_lhs)
+        return prim.bind(Ai, Aj, Ax, symbolic, numeric).reshape(batch, n_lhs), 0
+
+    if anumeric is not None:
+        if numeric.ndim != 2:
+            msg = f"numeric should be 2D when vectorizing over it. Got: {numeric.shape=}."
+            raise ValueError(msg)
+        numeric = jnp.moveaxis(numeric, anumeric, 0)
+        batch, n_lhs = numeric.shape
+        Ax = jnp.broadcast_to(Ax[None], (batch, Ax.shape[0], Ax.shape[1]))
+        Ax = Ax.reshape(batch * n_lhs, Ax.shape[2])
+        numeric = numeric.reshape(batch * n_lhs)
+        return prim.bind(Ai, Aj, Ax, symbolic, numeric).reshape(batch, n_lhs), 0
+
     msg = "vmap failed. Please select an axis to vectorize over."
     raise ValueError(msg)
 
