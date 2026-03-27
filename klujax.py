@@ -4,7 +4,7 @@
 
 __version__ = "0.4.8"
 __author__ = "Floris Laporte"
-__all__ = ["analyze", "coalesce", "dot", "factor", "free_numeric", "free_symbolic", "solve", "solve_with_numeric", "solve_with_symbol"]
+__all__ = ["analyze", "coalesce", "dot", "factor", "free_numeric", "free_symbolic", "refactor", "solve", "solve_with_numeric", "solve_with_symbol"]
 
 # Imports =============================================================================
 
@@ -380,6 +380,40 @@ def factor(Ai: Array, Aj: Array, Ax: Array, symbolic: Union[KLUHandleManager, Ar
     return KLUHandleManager(raw_numeric, free_numeric, owner=True)
 
 @jax.jit
+def _refactor_jit(Ai: Array, Aj: Array, Ax: Array, sym_h: Array, num_h: Array) -> Array:
+    dummy_b = jnp.zeros((1,), dtype=Ax.dtype)
+    Ai, Aj, Ax, _, _ = validate_args(Ai, Aj, Ax, dummy_b)
+    prim = refactor_c128 if Ax.dtype in COMPLEX_DTYPES else refactor_f64
+    return prim.bind(Ai, Aj, Ax, sym_h, num_h)
+
+def refactor(Ai: Array, Aj: Array, Ax: Array, numeric: Union[KLUHandleManager, Array], symbolic: Union[KLUHandleManager, Array]) -> KLUHandleManager:
+    """Re-factorize matrix A numerically, reusing the symbolic analysis.
+
+    Use when the sparsity pattern is unchanged but values have changed.
+    Modifies the numeric factorization in-place. Faster than calling factor().
+
+    Returns a KLUHandleManager holding the same underlying pointer as the input
+    numeric handle. The returned handle must be threaded into subsequent
+    solve_with_numeric calls so that XLA/JAX sees the dependency edge:
+    factor → refactor → solve.
+
+    Args:
+        Ai: [n_nz; int32]: the row indices of the sparse matrix A
+        Aj: [n_nz; int32]: the column indices of the sparse matrix A
+        Ax: [n_lhs? x n_nz; float64|complex128]: the values of the sparse matrix A
+        numeric: [KLUHandleManager|Array]: existing numeric factorization (modified in-place)
+        symbolic: [KLUHandleManager|Array]: the symbolic analysis object or handle
+
+    Returns:
+        numeric: [KLUHandleManager]: the updated numeric handle (same pointer, for XLA dep tracking)
+
+    """
+    num_h = getattr(numeric, "handle", numeric)
+    sym_h = getattr(symbolic, "handle", symbolic)
+    raw_handle = _refactor_jit(Ai, Aj, Ax, sym_h, num_h)
+    return KLUHandleManager(raw_handle, free_numeric, owner=False)
+
+@jax.jit
 def _solve_with_numeric_jit(num_h: Array, b: Array, sym_h: Array) -> Array:
     prim = solve_with_numeric_c128 if b.dtype in COMPLEX_DTYPES else solve_with_numeric_f64
     return prim.bind(sym_h.astype(jnp.uint64), num_h.astype(jnp.uint64), b)
@@ -421,6 +455,8 @@ factor_c128 = jax.extend.core.Primitive("factor_c128")
 solve_with_numeric_f64 = jax.extend.core.Primitive("solve_with_numeric_f64")
 solve_with_numeric_c128 = jax.extend.core.Primitive("solve_with_numeric_c128")
 free_numeric_p = jax.extend.core.Primitive("free_numeric")
+refactor_f64 = jax.extend.core.Primitive("refactor_f64")
+refactor_c128 = jax.extend.core.Primitive("refactor_c128")
 
 # Implementations =====================================================================
 
@@ -471,6 +507,18 @@ def factor_c128_impl(Ai, Aj, Ax, symbolic):
     n_lhs = Ax.shape[0]
     call = jax.ffi.ffi_call("factor_c128", jax.ShapeDtypeStruct((n_lhs,), jnp.uint64))
     return call(Ai, Aj, Ax, symbolic)
+
+@refactor_f64.def_impl
+def refactor_f64_impl(Ai, Aj, Ax, symbolic, numeric):
+    n_lhs = Ax.shape[0]
+    call = jax.ffi.ffi_call("refactor_f64", jax.ShapeDtypeStruct((n_lhs,), jnp.uint64))
+    return call(Ai, Aj, Ax, symbolic, numeric)
+
+@refactor_c128.def_impl
+def refactor_c128_impl(Ai, Aj, Ax, symbolic, numeric):
+    n_lhs = Ax.shape[0]
+    call = jax.ffi.ffi_call("refactor_c128", jax.ShapeDtypeStruct((n_lhs,), jnp.uint64))
+    return call(Ai, Aj, Ax, symbolic, numeric)
 
 @solve_with_numeric_f64.def_impl
 def solve_with_numeric_f64_impl(symbolic, numeric, b):
@@ -598,6 +646,14 @@ jax.ffi.register_ffi_target("factor_c128", klujax_cpp.factor_c128(), platform="c
 factor_c128_low = mlir.lower_fun(factor_c128_impl, multiple_results=False)
 mlir.register_lowering(factor_c128, factor_c128_low)
 
+jax.ffi.register_ffi_target("refactor_f64", klujax_cpp.refactor_f64(), platform="cpu")
+refactor_f64_low = mlir.lower_fun(refactor_f64_impl, multiple_results=False)
+mlir.register_lowering(refactor_f64, refactor_f64_low)
+
+jax.ffi.register_ffi_target("refactor_c128", klujax_cpp.refactor_c128(), platform="cpu")
+refactor_c128_low = mlir.lower_fun(refactor_c128_impl, multiple_results=False)
+mlir.register_lowering(refactor_c128, refactor_c128_low)
+
 jax.ffi.register_ffi_target("solve_with_numeric_f64", klujax_cpp.solve_with_numeric_f64(), platform="cpu")
 solve_with_numeric_f64_low = mlir.lower_fun(solve_with_numeric_f64_impl, multiple_results=False)
 mlir.register_lowering(solve_with_numeric_f64, solve_with_numeric_f64_low)
@@ -637,6 +693,11 @@ def free_symbolic_abstract_eval(symbolic: Array) -> None:  # noqa: ARG001
 @factor_f64.def_abstract_eval
 @factor_c128.def_abstract_eval
 def factor_abstract_eval(Ai, Aj, Ax, symbolic):
+    return ShapedArray((Ax.shape[0],), jnp.uint64)
+
+@refactor_f64.def_abstract_eval
+@refactor_c128.def_abstract_eval
+def refactor_abstract_eval(Ai, Aj, Ax, symbolic, numeric):
     return ShapedArray((Ax.shape[0],), jnp.uint64)
 
 @solve_with_numeric_f64.def_abstract_eval
@@ -810,6 +871,46 @@ def solve_with_numeric_c128_vmap(
 batching.primitive_batchers[solve_with_numeric_c128] = solve_with_numeric_c128_vmap
 
 
+def factor_f64_vmap(
+    vector_arg_values: tuple[Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    return general_vmap_factor(factor_f64, vector_arg_values, batch_axes)
+
+
+batching.primitive_batchers[factor_f64] = factor_f64_vmap
+
+
+def factor_c128_vmap(
+    vector_arg_values: tuple[Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    return general_vmap_factor(factor_c128, vector_arg_values, batch_axes)
+
+
+batching.primitive_batchers[factor_c128] = factor_c128_vmap
+
+
+def refactor_f64_vmap(
+    vector_arg_values: tuple[Array, Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    return general_vmap_refactor(refactor_f64, vector_arg_values, batch_axes)
+
+
+batching.primitive_batchers[refactor_f64] = refactor_f64_vmap
+
+
+def refactor_c128_vmap(
+    vector_arg_values: tuple[Array, Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    return general_vmap_refactor(refactor_c128, vector_arg_values, batch_axes)
+
+
+batching.primitive_batchers[refactor_c128] = refactor_c128_vmap
+
+
 def general_vmap(
     prim: jax.extend.core.Primitive,
     vector_arg_values: tuple[Array, Array, Array, Array],
@@ -950,50 +1051,138 @@ def general_vmap_with_numeric(
     
     # numeric and b should batch together
     if anumeric is not None and ab is not None:
-        # Both numeric and b are batched - they should batch along the same dimension
-        if numeric.ndim != 2 or b.ndim != 3:
+        if numeric.ndim != 2 or b.ndim < 2:
             msg = (
-                "numeric and b should be 2D and 3D respectively when vectorizing "
+                "numeric should be 2D and b should be at least 2D when vectorizing "
                 f"over them simultaneously. Got: {numeric.shape=}; {b.shape=}."
             )
             raise ValueError(msg)
-        # Move batch axes to the front
         numeric = jnp.moveaxis(numeric, anumeric, 0)
         b = jnp.moveaxis(b, ab, 0)
         shape = b.shape
-        # Flatten the batch dimension with the matrix dimension
-        numeric = numeric.reshape(numeric.shape[0] * numeric.shape[1])
-        b = b.reshape(b.shape[0] * b.shape[1], b.shape[2])
+        batch = shape[0]
+        numeric = numeric.reshape(batch * numeric.shape[1])
+        if b.ndim >= 3:
+            b = b.reshape(batch * b.shape[1], *b.shape[2:])
+        # b.ndim == 2: shape is (batch, n) — pass directly, matches multi-LHS convention
         result = prim.bind(symbolic, numeric, b)
-        # Reshape back to include the batch dimension
         return result.reshape(*shape), 0
-    
+
     if anumeric is not None:
-        # Only numeric is batched
-        if numeric.ndim != 2 or b.ndim != 2:
-            msg = (
-                "numeric and b should be 2D when vectorizing over numeric. "
-                f"Got: {numeric.shape=}; {b.shape=}."
-            )
+        if numeric.ndim != 2:
+            msg = f"numeric should be 2D when vectorizing over it. Got: {numeric.shape=}."
             raise ValueError(msg)
         numeric = jnp.moveaxis(numeric, anumeric, 0)
-        # Broadcast b to match the batch dimension
-        b = jnp.broadcast_to(b[None], (numeric.shape[0], b.shape[0], b.shape[1]))
+        batch = numeric.shape[0]
+        b = jnp.broadcast_to(b[None], (batch, *b.shape))
         shape = b.shape
-        numeric = numeric.reshape(numeric.shape[0] * numeric.shape[1])
-        b = b.reshape(b.shape[0] * b.shape[1], b.shape[2])
+        numeric = numeric.reshape(batch * numeric.shape[1])
+        if b.ndim >= 3:
+            b = b.reshape(batch * b.shape[1], *b.shape[2:])
+        # b.ndim == 2: shape is (batch, n) — pass directly
         return prim.bind(symbolic, numeric, b).reshape(*shape), 0
-    
+
     if ab is not None:
-        # Only b is batched
-        if b.ndim != 3:
-            msg = f"b should be 3D when vectorizing over it. Got: {b.shape=}."
-            raise ValueError(msg)
-        b = jnp.moveaxis(b, ab, 2)
+        b = jnp.moveaxis(b, ab, -1)
         shape = b.shape
-        b = b.reshape(b.shape[0], b.shape[1] * b.shape[2])
-        return prim.bind(symbolic, numeric, b).reshape(*shape), 2
+        if b.ndim >= 3:
+            b = b.reshape(*b.shape[:-2], b.shape[-2] * b.shape[-1])
+        # b.ndim == 2: shape is (n, batch) — pass directly as multi-RHS
+        return prim.bind(symbolic, numeric, b).reshape(*shape), len(shape) - 1
     
+    msg = "vmap failed. Please select an axis to vectorize over."
+    raise ValueError(msg)
+
+
+def general_vmap_factor(
+    prim: jax.extend.core.Primitive,
+    vector_arg_values: tuple[Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    Ai, Aj, Ax, symbolic = vector_arg_values
+    aAi, aAj, aAx, asymbolic = batch_axes
+
+    if aAi is not None:
+        msg = "Ai cannot be vectorized."
+        raise ValueError(msg)
+
+    if aAj is not None:
+        msg = "Aj cannot be vectorized."
+        raise ValueError(msg)
+
+    if asymbolic is not None:
+        msg = "symbolic handle cannot be vectorized."
+        raise ValueError(msg)
+
+    if aAx is not None:
+        if Ax.ndim != 3:
+            msg = f"Ax should be 3D when vectorizing over it. Got: {Ax.shape=}."
+            raise ValueError(msg)
+        Ax = jnp.moveaxis(Ax, aAx, 0)
+        batch, n_lhs, n_vals = Ax.shape
+        Ax = Ax.reshape(batch * n_lhs, n_vals)
+        return prim.bind(Ai, Aj, Ax, symbolic).reshape(batch, n_lhs), 0
+
+    msg = "vmap failed. Please select an axis to vectorize over."
+    raise ValueError(msg)
+
+
+def general_vmap_refactor(
+    prim: jax.extend.core.Primitive,
+    vector_arg_values: tuple[Array, Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    Ai, Aj, Ax, symbolic, numeric = vector_arg_values
+    aAi, aAj, aAx, asymbolic, anumeric = batch_axes
+
+    if aAi is not None:
+        msg = "Ai cannot be vectorized."
+        raise ValueError(msg)
+
+    if aAj is not None:
+        msg = "Aj cannot be vectorized."
+        raise ValueError(msg)
+
+    if asymbolic is not None:
+        msg = "symbolic handle cannot be vectorized."
+        raise ValueError(msg)
+
+    if aAx is not None and anumeric is not None:
+        if Ax.ndim != 3 or numeric.ndim != 2:
+            msg = (
+                "Ax and numeric should be 3D and 2D respectively when vectorizing "
+                f"over them simultaneously. Got: {Ax.shape=}; {numeric.shape=}."
+            )
+            raise ValueError(msg)
+        Ax = jnp.moveaxis(Ax, aAx, 0)
+        numeric = jnp.moveaxis(numeric, anumeric, 0)
+        batch, n_lhs, n_vals = Ax.shape
+        Ax = Ax.reshape(batch * n_lhs, n_vals)
+        numeric = numeric.reshape(batch * n_lhs)
+        return prim.bind(Ai, Aj, Ax, symbolic, numeric).reshape(batch, n_lhs), 0
+
+    if aAx is not None:
+        if Ax.ndim != 3:
+            msg = f"Ax should be 3D when vectorizing over it. Got: {Ax.shape=}."
+            raise ValueError(msg)
+        Ax = jnp.moveaxis(Ax, aAx, 0)
+        batch, n_lhs, n_vals = Ax.shape
+        numeric = jnp.broadcast_to(numeric[None], (batch, numeric.shape[0]))
+        Ax = Ax.reshape(batch * n_lhs, n_vals)
+        numeric = numeric.reshape(batch * n_lhs)
+        return prim.bind(Ai, Aj, Ax, symbolic, numeric).reshape(batch, n_lhs), 0
+
+    if anumeric is not None:
+        if numeric.ndim != 2:
+            msg = f"numeric should be 2D when vectorizing over it. Got: {numeric.shape=}."
+            raise ValueError(msg)
+        numeric = jnp.moveaxis(numeric, anumeric, 0)
+        batch, n_lhs = numeric.shape
+        Ax = jnp.broadcast_to(Ax[None], (batch, Ax.shape[0], Ax.shape[1]))
+        Ax = Ax.reshape(batch * n_lhs, Ax.shape[2])
+        numeric = numeric.reshape(batch * n_lhs)
+        return prim.bind(Ai, Aj, Ax, symbolic, numeric).reshape(batch, n_lhs), 0
+
     msg = "vmap failed. Please select an axis to vectorize over."
     raise ValueError(msg)
 
