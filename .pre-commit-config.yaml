@@ -3,7 +3,7 @@ repos:
     hooks:
       - id: ty
         name: ty
-        entry: uv run --dev ty check
+        entry: uv run --no-project ty check
         language: system
         types_or: [python]
   - repo: https://github.com/astral-sh/ruff-pre-commit
@@ -27,3 +27,4 @@ repos:
     hooks:
       - id: pretty-format-toml
         args: [--autofix]
+        exclude: uv\.lock

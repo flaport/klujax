@@ -117,7 +117,7 @@ x = jax.vmap(klujax.solve, in_axes=(None, None, 0, 0))(Ai, Aj, Ax_batch, b_batch
 ```
 
 !!! note
-`Ai` and `Aj` are **never** batched — all systems share the same sparsity pattern. Always use `in_axes=None` for the index arrays.
+    `Ai` and `Aj` are **never** batched — all systems share the same sparsity pattern. Always use `in_axes=None` for the index arrays.
 
 ## Complete Example: Parameter Sweep
 

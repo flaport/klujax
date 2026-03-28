@@ -83,4 +83,4 @@ with klujax.analyze(Ai, Aj, n_col) as symbolic:
 ```
 
 !!! tip
-The best practice is to create handles **outside** JIT. Then you never need `free_symbolic` or `free_numeric` at all. See [Memory Management](../advanced/memory-management.md).
+    The best practice is to create handles **outside** JIT. Then you never need `free_symbolic` or `free_numeric` at all. See [Memory Management](../advanced/memory-management.md).

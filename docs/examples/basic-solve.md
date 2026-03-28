@@ -35,12 +35,12 @@ b = jnp.array([8.0, 45.0, -3.0, 3.0, 19.0])
 ```
 
 !!! tip "Quick conversion from dense"
-If you already have a dense matrix, convert it like this:
-`python
+    If you already have a dense matrix, convert it like this:
+    ```python
     A_dense = jnp.array([[2, 3, 0, 0, 0], ...])
     Ai, Aj = jnp.where(jnp.abs(A_dense) > 0)
     Ax = A_dense[Ai, Aj]
-    `
+    ```
 
 ## Step 2: Solve
 

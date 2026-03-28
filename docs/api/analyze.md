@@ -85,7 +85,7 @@ symbolic.close()
 ```
 
 !!! warning "Inside JIT"
-If you call `analyze` inside a `jax.jit`-compiled function, the handle **will not** be freed automatically. You must call [free_symbolic](free.md) explicitly. See [Memory Management](../advanced/memory-management.md) for details.
+    If you call `analyze` inside a `jax.jit`-compiled function, the handle **will not** be freed automatically. You must call [free_symbolic](free.md) explicitly. See [Memory Management](../advanced/memory-management.md) for details.
 
 !!! note "Not JIT-compiled itself"
-`analyze` is a Python-side function — it runs eagerly on the CPU. Call it **outside** your JIT-compiled loops.
+    `analyze` is a Python-side function — it runs eagerly on the CPU. Call it **outside** your JIT-compiled loops.

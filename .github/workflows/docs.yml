@@ -25,7 +25,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install dependencies
-        run: pip install mkdocs-shadcn@git+https://github.com/flaport/mkdocs-shadcn.git pymdown-extensions
+        run: pip install mkdocs-shadcn@git+https://github.com/flaport/mkdocs-shadcn.git pymdown-extensions pygments
       - name: Build docs
         run: mkdocs build --strict
       - name: Upload artifact

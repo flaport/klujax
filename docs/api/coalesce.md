@@ -58,7 +58,7 @@ Ai, Aj, Ax = klujax.coalesce(Ai, Aj, Ax)
 ```
 
 !!! warning "Not JIT-compatible"
-`coalesce` uses `jax.ensure_compile_time_eval()` internally and **cannot** be used inside `jax.jit`. Always call it before entering any JIT-compiled function.
+    `coalesce` uses `jax.ensure_compile_time_eval()` internally and **cannot** be used inside `jax.jit`. Always call it before entering any JIT-compiled function.
 
 ## When Do Duplicates Appear?
 

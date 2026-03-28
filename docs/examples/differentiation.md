@@ -136,4 +136,4 @@ print(f"Final Ax: {Ax}")
 ```
 
 !!! warning "No gradients through indices"
-You cannot differentiate with respect to `Ai` or `Aj`. These are integer arrays that define the sparsity pattern — they're not continuous and not differentiable.
+    You cannot differentiate with respect to `Ai` or `Aj`. These are integer arrays that define the sparsity pattern — they're not continuous and not differentiable.

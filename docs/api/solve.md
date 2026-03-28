@@ -57,7 +57,7 @@ Every call to `solve` performs all three KLU stages. This is convenient but not 
 | `jax.vmap`   | Yes                       |
 
 !!! warning
-Gradients with respect to `Ai` and `Aj` (the indices) are **not** supported — indices are integers and not differentiable.
+    Gradients with respect to `Ai` and `Aj` (the indices) are **not** supported — indices are integers and not differentiable.
 
 ## Examples
 

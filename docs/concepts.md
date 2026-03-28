@@ -66,7 +66,7 @@ Ai, Aj, Ax = klujax.coalesce(Ai, Aj, Ax)
 ```
 
 !!! warning
-`coalesce` cannot be used inside `jax.jit`. Call it before entering any JIT-compiled function.
+    `coalesce` cannot be used inside `jax.jit`. Call it before entering any JIT-compiled function.
 
 ## The KLU Algorithm
 
@@ -154,4 +154,4 @@ klujax only supports double precision:
 If either `Ax` or `b` is complex, the entire solve uses complex arithmetic.
 
 !!! note
-klujax automatically enables `jax_enable_x64` when imported. You don't need to configure this yourself.
+    klujax automatically enables `jax_enable_x64` when imported. You don't need to configure this yourself.
