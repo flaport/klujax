@@ -27,9 +27,10 @@ from types import TracebackType
 from typing import Any, Self
 
 import jax
+import jax.core
 import jax.extend.core
 import jax.numpy as jnp
-import klujax_cpp
+import klujax_cpp  # ty: ignore[unresolved-import]
 import numpy as np
 from jax import lax
 from jax.core import ShapedArray

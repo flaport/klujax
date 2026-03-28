@@ -2,6 +2,7 @@ import sys
 from functools import wraps
 
 import jax
+import jax.core
 import jax.numpy as jnp
 import jax.scipy as jsp
 import numpy as np
