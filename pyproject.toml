@@ -30,7 +30,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 version = "0.4.8"
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
   "build>=1.2.2",
   "ipykernel>=6.29.5",
@@ -38,7 +38,12 @@ dev = [
   "pytest>=8.3.4",
   "ruff>=0.9.7",
   "setuptools>=75.8.0",
-  "tbump>=6.11.0"
+  "tbump>=6.11.0",
+]
+docs = [
+  "mkdocs",
+  "mkdocs-shadcn @ git+https://github.com/flaport/mkdocs-shadcn.git",
+  "pymdown-extensions>=10.0",
 ]
 
 [[tool.bver.file]]
