@@ -19,11 +19,12 @@ __all__ = [
 
 # Imports =============================================================================
 
+import contextlib
 import os
 import sys
 from collections.abc import Callable
 from types import TracebackType
-from typing import Any
+from typing import Any, Self
 
 import jax
 import jax.extend.core
@@ -194,13 +195,11 @@ class KLUHandleManager:
             return
 
         if self._owner and self.free_callable:
-            try:
+            with contextlib.suppress(Exception):
                 self.free_callable(self.handle)
-            except Exception:
-                pass
         self._freed = True
 
-    def __enter__(self) -> "KLUHandleManager":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(
@@ -309,7 +308,7 @@ def analyze(Ai: Array, Aj: Array, n_col: int) -> KLUHandleManager:
 def validate_numeric_solve(
     Ai: Array, Aj: Array, Ax: Array, b: Array
 ) -> tuple[Array, Array, Array, Array, tuple[int, ...]]:
-    """Reduced set of validate_args for use with solve_with_symbol"""
+    """Reduced set of validate_args for use with solve_with_symbol."""
     order = jnp.lexsort((Aj, Ai))
     Ai, Aj = Ai[order], Aj[order]
     Ax = Ax[..., order] if Ax.ndim == 2 else Ax[order]
@@ -328,7 +327,8 @@ def validate_numeric_solve(
         shape = (Ax.shape[0], shape[0])
     elif Ax.ndim == 2 and b.ndim == 2:
         if Ax.shape[0] != b.shape[0] and Ax.shape[0] != 1 and b.shape[0] != 1:
-            raise ValueError(f"Batch mismatch: {Ax.shape=} vs {b.shape=}")
+            msg = f"Batch mismatch: {Ax.shape=} vs {b.shape=}"
+            raise ValueError(msg)
         b = b[:, :, None]
         if b.shape[0] == 1 and Ax.shape[0] > 1:
             shape = (Ax.shape[0], *shape[1:])
@@ -1527,7 +1527,7 @@ def solve_with_symbol_value_and_jvp(
 
     """
     Ai, Aj, Ax, b, symbolic = arg_values
-    t_Ai, t_Aj, t_Ax, t_b, t_symbolic = arg_tangents
+    _t_Ai, _t_Aj, t_Ax, t_b, _t_symbolic = arg_tangents
 
     x = prim_solve.bind(Ai, Aj, Ax, b, symbolic)
 
@@ -1535,10 +1535,7 @@ def solve_with_symbol_value_and_jvp(
 
     if not isinstance(t_Ax, ad.Zero):
         dAx = prim_dot.bind(Ai, Aj, t_Ax, x)
-        if isinstance(rhs, ad.Zero):
-            rhs = -dAx
-        else:
-            rhs = rhs - dAx
+        rhs = -dAx if isinstance(rhs, ad.Zero) else rhs - dAx
 
     if isinstance(rhs, ad.Zero):
         dx = jnp.zeros_like(x)
@@ -1611,10 +1608,7 @@ def solve_with_symbol_transpose(
         tangents: tuple of tangents for (Ai, Aj, Ax, b, symbolic)
 
     """
-    if solve_prim is solve_with_symbol_f64:
-        base_solve = solve_f64
-    else:
-        base_solve = solve_c128
+    base_solve = solve_f64 if solve_prim is solve_with_symbol_f64 else solve_c128
 
     t_Ai, t_Aj, t_Ax, t_b = solve_transpose(base_solve, ct, Ai, Aj, Ax, b)
 
