@@ -41,6 +41,14 @@ inplace:
 test:
     uv run pytest tests.py
 
+# Build docs
+docs:
+    uv run mkdocs build
+
+# Serve docs locally
+serve:
+    uv run mkdocs serve -a localhost:8080
+
 # Clone SuiteSparse
 suitesparse:
     rm -rf suitesparse

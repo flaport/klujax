@@ -1,0 +1,67 @@
+site_name: klujax
+site_description: A sparse linear solver for JAX based on the KLU algorithm
+site_url: https://flaport.github.io/klujax
+repo_url: https://github.com/flaport/klujax
+repo_name: flaport/klujax
+
+theme:
+  name: shadcn
+  show_title: true
+  site_author: Claude Code
+  show_stargazers: true
+  pygments_style:
+    light: shadcn-light
+    dark: github-dark
+  katex_options: {}
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Core Concepts: concepts.md
+  - API Reference:
+      - solve: api/solve.md
+      - dot: api/dot.md
+      - coalesce: api/coalesce.md
+      - analyze: api/analyze.md
+      - factor: api/factor.md
+      - refactor: api/refactor.md
+      - solve_with_symbol: api/solve-with-symbol.md
+      - solve_with_numeric: api/solve-with-numeric.md
+      - free_symbolic / free_numeric: api/free.md
+  - Examples:
+      - Basic Solve: examples/basic-solve.md
+      - Batched Systems: examples/batched.md
+      - Differentiation: examples/differentiation.md
+      - High-Performance Loop: examples/high-performance.md
+      - Newton-Raphson Solver: examples/newton-raphson.md
+  - Advanced:
+      - JAX Integration: advanced/jax-integration.md
+      - Memory Management: advanced/memory-management.md
+      - Performance Guide: advanced/performance.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - toc:
+      permalink: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_div_format
+  - pymdownx.blocks.tab
+  - pymdownx.details
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+
+extra_javascript:
+  - https://unpkg.com/mermaid@11/dist/mermaid.min.js
+  - js/mermaid-init.js
+
+plugins:
+  - search
