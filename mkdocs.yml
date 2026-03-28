@@ -7,6 +7,7 @@ repo_name: flaport/klujax
 theme:
   name: shadcn
   show_title: true
+  site_author: Claude Code
   show_stargazers: true
   pygments_style:
     light: shadcn-light

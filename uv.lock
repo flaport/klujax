@@ -690,7 +690,7 @@ wheels = [
 [[package]]
 name = "mkdocs-shadcn"
 version = "0.10.2"
-source = { git = "https://github.com/flaport/mkdocs-shadcn.git#13d85fc1164c5dd363c7aa2fcec914695fb3035c" }
+source = { git = "https://github.com/flaport/mkdocs-shadcn.git#eb0153c4985f1fd4f2903a7f53d24eced960a235" }
 dependencies = [
     { name = "bottle" },
     { name = "gitpython" },
