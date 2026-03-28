@@ -10,7 +10,8 @@ dev = [
   "pytest>=8.3.4",
   "ruff>=0.9.7",
   "setuptools>=75.8.0",
-  "tbump>=6.11.0"
+  "tbump>=6.11.0",
+  "ty==0.0.26"
 ]
 docs = [
   "mkdocs",
@@ -29,7 +30,6 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
-  "License :: OSI Approved :: GNU Lesser General Public License v2 (LGPLv2)",
   "Operating System :: OS Independent",
   "Topic :: Scientific/Engineering :: Mathematics"
 ]
@@ -40,7 +40,8 @@ dependencies = [
   "numpy>=2"
 ]
 description = "a KLU solver for JAX"
-license = {file = "LICENSE"}
+license = "LGPL-2.0-only"
+license-files = ["LICENSE"]
 name = "klujax"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -73,14 +74,32 @@ target-version = "py311"
 docstring-code-format = true
 
 [tool.ruff.lint]  # see https://docs.astral.sh/ruff/rules
-ignore = ["N803", "D213", "N806", "TD002", "D211", "TD003", "PLR0913", "FIX", "ERA", "PLR2004", "COM812", "D203"]
+ignore = [
+  "N803",  # invalid-argument-name
+  "D213",  # multi-line-summary-second-line
+  "N806",  # non-lowercase-variable-in-function
+  "TD002",  # missing-todo-author
+  "D211",  # blank-line-before-class
+  "TD003",  # missing-todo-link
+  "PLR0913",  # too-many-arguments
+  "FIX",  # flake8-fixme
+  "ERA",  # eradicate
+  "PLR2004",  # magic-value-comparison
+  "COM812",  # missing-trailing-comma
+  "D203",  # one-blank-line-before-class
+  "ANN001",  # missing-type-annotation
+  "ANN202",  # missing-return-type-annotation
+  "ARG001",  # unused-function-argument
+  "ARG005",  # unused-lambda-argument
+  "S101"  # assert-used
+]
 select = ["ALL"]
 
 [tool.ruff.lint.per-file-ignores]
 ".github/run_tests.py" = ["INP", "PTH", "T201", "S603", "S607"]
 "benchmark.py" = ["INP001", "T201"]
 "setup.py" = ["PTH", "ANN", "D101", "D102"]
-"tests.py" = ["D", "INP001", "ANN", "T201", "E501", "N806"]
+"tests.py" = ["D", "INP001", "ANN", "T201", "E501", "N806", "SLF001"]
 
 [tool.setuptools.package-data]
 "*" = [

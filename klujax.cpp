@@ -2,14 +2,14 @@
 // Imports
 
 #include <cmath>
-
 #include <complex>
 #include <cstdint>
+#include <cstring>
+#include <memory>
+
 #include "klu.h"
 #include "pybind11/pybind11.h"
 #include "xla/ffi/api/ffi.h"
-#include <cstring> 
-#include <memory> 
 
 namespace py = pybind11;
 namespace ffi = xla::ffi;
@@ -514,11 +514,10 @@ ffi::Error factor_impl(
     if (sym_addr == 0) return ffi::Error::InvalidArgument("symbolic pointer is null");
     klu_symbolic* Symbolic = reinterpret_cast<klu_symbolic*>(sym_addr);
 
-
     int n_lhs = (int)ds_Ax[0];
     int n_nz = (int)ds_Ax[1];
     int n_col = Symbolic->n;
-    
+
     if (Ai.dimensions().size() != 1 || Aj.dimensions().size() != 1) return ffi::Error::InvalidArgument("Ai/Aj must be 1D");
     if (Ai.dimensions()[0] != n_nz || Aj.dimensions()[0] != n_nz) return ffi::Error::InvalidArgument("Ai/Aj size mismatch with Ax");
 
@@ -545,14 +544,14 @@ ffi::Error factor_impl(
 
         klu_numeric* Numeric = KluTraits<T>::factor(_Bp.get(), _Bi.get(), _Bx.get(), Symbolic, &Common);
         if (Numeric == nullptr || Common.status < KLU_OK) {
-             // Cleanup already allocated numerics in this batch?
-             // For simplicity, we return error and let user handle cleanup (or leak, but this is exception path).
-             // Ideally we should cleanup.
-             for(int j=0; j<i; j++) {
-                 klu_numeric* num = reinterpret_cast<klu_numeric*>(_numeric[j]);
-                 klu_free_numeric(&num, &Common);
-             }
-             return ffi::Error::InvalidArgument("klu_factor/z_factor failed (singular matrix?)");
+            // Cleanup already allocated numerics in this batch?
+            // For simplicity, we return error and let user handle cleanup (or leak, but this is exception path).
+            // Ideally we should cleanup.
+            for (int j = 0; j < i; j++) {
+                klu_numeric* num = reinterpret_cast<klu_numeric*>(_numeric[j]);
+                klu_free_numeric(&num, &Common);
+            }
+            return ffi::Error::InvalidArgument("klu_factor/z_factor failed (singular matrix?)");
         }
         _numeric[i] = reinterpret_cast<uint64_t>(Numeric);
     }
@@ -574,8 +573,8 @@ ffi::Error factor_c128(
     const ffi::Buffer<ffi::DataType::C128> Ax,
     const ffi::Buffer<ffi::DataType::U64> symbolic,
     ffi::Result<ffi::Buffer<ffi::DataType::U64>> numeric) {
-    return factor_impl<Complex>(Ai, Aj, Ax.dimensions(), symbolic, 
-                                reinterpret_cast<const Complex*>(Ax.typed_data()), 
+    return factor_impl<Complex>(Ai, Aj, Ax.dimensions(), symbolic,
+                                reinterpret_cast<const Complex*>(Ax.typed_data()),
                                 numeric->typed_data());
 }
 
@@ -586,8 +585,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::Buffer<ffi::DataType::S32>>()
         .Arg<ffi::Buffer<ffi::DataType::F64>>()
         .Arg<ffi::Buffer<ffi::DataType::U64>>()
-        .Ret<ffi::Buffer<ffi::DataType::U64>>()
-);
+        .Ret<ffi::Buffer<ffi::DataType::U64>>());
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     factor_c128_handler, factor_c128,
@@ -596,8 +594,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::Buffer<ffi::DataType::S32>>()
         .Arg<ffi::Buffer<ffi::DataType::C128>>()
         .Arg<ffi::Buffer<ffi::DataType::U64>>()
-        .Ret<ffi::Buffer<ffi::DataType::U64>>()
-);
+        .Ret<ffi::Buffer<ffi::DataType::U64>>());
 
 template <typename T>
 ffi::Error refactor_impl(
@@ -693,12 +690,12 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     refactor_c128_handler, refactor_c128,
     ffi::Ffi::Bind()
-        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Ai
-        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Aj
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()   // Ai
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()   // Aj
         .Arg<ffi::Buffer<ffi::DataType::C128>>()  // Ax
-        .Arg<ffi::Buffer<ffi::DataType::U64>>()  // symbolic
-        .Arg<ffi::Buffer<ffi::DataType::U64>>()  // numeric (input handles)
-        .Ret<ffi::Buffer<ffi::DataType::U64>>()  // out_numeric (same handles, for XLA dep edge)
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()   // symbolic
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()   // numeric (input handles)
+        .Ret<ffi::Buffer<ffi::DataType::U64>>()   // out_numeric (same handles, for XLA dep edge)
 );
 
 template <typename T>
@@ -709,7 +706,6 @@ ffi::Error solve_with_numeric_impl(
     const ffi::Buffer<ffi::DataType::U64>& numeric,
     const T* _b,
     T* _x) {
-    
     if (symbolic.element_count() != 1) return ffi::Error::InvalidArgument("symbolic must be scalar");
     uint64_t sym_addr = *symbolic.typed_data();
     if (sym_addr == 0) return ffi::Error::InvalidArgument("symbolic pointer is null");
@@ -717,11 +713,11 @@ ffi::Error solve_with_numeric_impl(
 
     int n_numeric = numeric.element_count();
     const uint64_t* _numeric = numeric.typed_data();
-    
+
     // Parse b dimensions
     int d_b = ds_b.size();
     int n_lhs_b, n_col, n_rhs;
-    
+
     if (d_b == 1) {
         // b is (n_col,) -> treat as (1, n_col, 1)
         n_lhs_b = 1;
@@ -749,11 +745,11 @@ ffi::Error solve_with_numeric_impl(
     } else {
         return ffi::Error::InvalidArgument("b must be 1D, 2D, or 3D");
     }
-    
+
     // Determine output batch size
     bool broadcast_numeric = (n_numeric == 1);
     bool broadcast_b = (n_lhs_b == 1);
-    
+
     int n_lhs;
     if (!broadcast_numeric && !broadcast_b) {
         if (n_numeric != n_lhs_b) {
@@ -767,14 +763,14 @@ ffi::Error solve_with_numeric_impl(
     } else {
         n_lhs = 1;
     }
-    
+
     // Validate output dimensions match expected
     if (ds_x.size() != d_b) {
         return ffi::Error::InvalidArgument("output dimensions don't match input");
     }
-    
+
     auto _x_temp = std::make_unique<T[]>(n_lhs * n_col * n_rhs);
-    
+
     // Copy b to x_temp (transpose) with broadcasting
     for (int m = 0; m < n_lhs; m++) {
         int m_b = broadcast_b ? 0 : m;
@@ -792,10 +788,10 @@ ffi::Error solve_with_numeric_impl(
         int n = i * n_rhs * n_col;
         uint64_t num_addr = broadcast_numeric ? _numeric[0] : _numeric[i];
         if (num_addr == 0) return ffi::Error::InvalidArgument("numeric pointer is null");
-        
+
         klu_numeric* Numeric = reinterpret_cast<klu_numeric*>(num_addr);
         KluTraits<T>::solve(Symbolic, Numeric, n_col, n_rhs, &_x_temp[n], &Common);
-        
+
         if (Common.status < KLU_OK) {
             return ffi::Error::InvalidArgument("klu_solve/z_solve failed");
         }
@@ -825,8 +821,8 @@ ffi::Error solve_with_numeric_c128(
     const ffi::Buffer<ffi::DataType::U64> numeric,
     const ffi::Buffer<ffi::DataType::C128> b,
     ffi::Result<ffi::Buffer<ffi::DataType::C128>> x) {
-    return solve_with_numeric_impl<Complex>(b.dimensions(), x->dimensions(), symbolic, numeric, 
-                                            reinterpret_cast<const Complex*>(b.typed_data()), 
+    return solve_with_numeric_impl<Complex>(b.dimensions(), x->dimensions(), symbolic, numeric,
+                                            reinterpret_cast<const Complex*>(b.typed_data()),
                                             reinterpret_cast<Complex*>(x->typed_data()));
 }
 
@@ -836,8 +832,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::Buffer<ffi::DataType::U64>>()
         .Arg<ffi::Buffer<ffi::DataType::U64>>()
         .Arg<ffi::Buffer<ffi::DataType::F64>>()
-        .Ret<ffi::Buffer<ffi::DataType::F64>>()
-);
+        .Ret<ffi::Buffer<ffi::DataType::F64>>());
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     solve_with_numeric_c128_handler, solve_with_numeric_c128,
@@ -845,27 +840,25 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::Buffer<ffi::DataType::U64>>()
         .Arg<ffi::Buffer<ffi::DataType::U64>>()
         .Arg<ffi::Buffer<ffi::DataType::C128>>()
-        .Ret<ffi::Buffer<ffi::DataType::C128>>()
-);
+        .Ret<ffi::Buffer<ffi::DataType::C128>>());
 
 ffi::Error free_numeric(
     const ffi::Buffer<ffi::DataType::U64> numeric,
     ffi::Result<ffi::Buffer<ffi::DataType::S32>> status) {
-    
     int n = numeric.element_count();
     const uint64_t* _numeric = numeric.typed_data();
-    
+
     klu_common Common;
     klu_defaults(&Common);
 
-    for(int i=0; i<n; i++) {
+    for (int i = 0; i < n; i++) {
         uint64_t addr = _numeric[i];
         if (addr != 0) {
             klu_numeric* Numeric = reinterpret_cast<klu_numeric*>(addr);
             klu_free_numeric(&Numeric, &Common);
         }
     }
-    
+
     // returning value so function can be traced
     *status->typed_data() = 1;
     return ffi::Error::Success();
@@ -874,7 +867,6 @@ ffi::Error free_numeric(
 ffi::Error free_symbolic(
     const ffi::Buffer<ffi::DataType::U64> symbolic,
     ffi::Result<ffi::Buffer<ffi::DataType::S32>> status) {
-    
     if (symbolic.element_count() != 1) {
         return ffi::Error::InvalidArgument("symbolic must be a scalar.");
     }
@@ -890,22 +882,22 @@ ffi::Error free_symbolic(
     klu_free_symbolic(&Symbolic, &Common);
 
     // returning value so function can be traced
-    *status->typed_data() = 1; 
+    *status->typed_data() = 1;
     return ffi::Error::Success();
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     free_numeric_handler, free_numeric,
     ffi::Ffi::Bind()
-        .Arg<ffi::Buffer<ffi::DataType::U64>>()    // numeric
-        .Ret<ffi::Buffer<ffi::DataType::S32>>()    // status (instead of no return)
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()  // numeric
+        .Ret<ffi::Buffer<ffi::DataType::S32>>()  // status (instead of no return)
 );
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     free_symbolic_handler, free_symbolic,
     ffi::Ffi::Bind()
-        .Arg<ffi::Buffer<ffi::DataType::U64>>()    // symbolic
-        .Ret<ffi::Buffer<ffi::DataType::S32>>()    // status
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()  // symbolic
+        .Ret<ffi::Buffer<ffi::DataType::S32>>()  // status
 );
 
 ffi::Error analyze(

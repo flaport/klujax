@@ -7,7 +7,7 @@ list:
 # Set up development environment (clones dependencies first)
 dev: maybe-deps bver
     uv venv --python 3.13 --clear
-    uv sync --all-extras
+    uv sync --all-extras --all-groups --upgrade
     uv run python setup.py build_ext --inplace
 
 # Build distribution
