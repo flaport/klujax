@@ -178,7 +178,7 @@ def test_analyze():
     assert isinstance(symbolic, klujax.KLUHandleManager)
     assert symbolic._owner is True
     assert symbolic.handle.dtype == jnp.uint64
-    
+
     # Manually free to be clean before next step
     klujax.free_symbolic(symbolic)
     assert symbolic._freed is True
@@ -186,10 +186,10 @@ def test_analyze():
     @jax.jit
     def jit_analyze_and_solve(Ai, Aj, Ax, b):
         # Create handle inside JIT
-        sym = klujax.analyze(Ai, Aj, 5) # Inside JIT, this is a Tracer
+        sym = klujax.analyze(Ai, Aj, 5)  # Inside JIT, this is a Tracer
 
         x = klujax.solve_with_symbol(Ai, Aj, Ax, b, sym)
-        
+
         klujax.free_symbolic(sym, dependency=x)
         return x
 
@@ -231,6 +231,7 @@ def test_solve_with_symbol_batched(dtype):
     _log_and_test_equality(x, x_sp)
 
     klujax.free_symbolic(symbolic)
+
 
 @log_test_name
 @parametrize_dtypes
@@ -377,15 +378,20 @@ def _is_almost_equal(arr1, arr2):
     else:
         return True
 
+
 def _make_ax2(Ai, Aj, Ax, *, dtype, seed=42):
     """New Ax values with the same sparsity pattern as Ax, with a strong diagonal."""
     Ax_raw = jax.random.normal(jax.random.PRNGKey(seed), Ax.shape, dtype=dtype)
     # Ensure diagonal entries are large (invertible) — Ai[k]==Aj[k] marks diagonal positions
     if Ax_raw.ndim == 1:
-        Ax_raw = Ax_raw + jnp.where(Ai == Aj, jnp.full_like(Ax_raw, 10.0), jnp.zeros_like(Ax_raw))
+        Ax_raw = Ax_raw + jnp.where(
+            Ai == Aj, jnp.full_like(Ax_raw, 10.0), jnp.zeros_like(Ax_raw)
+        )
     else:  # (n_lhs, n_nz) batch case
         diag_mask = (Ai == Aj)[None, :]
-        Ax_raw = Ax_raw + jnp.where(diag_mask, jnp.full_like(Ax_raw, 10.0), jnp.zeros_like(Ax_raw))
+        Ax_raw = Ax_raw + jnp.where(
+            diag_mask, jnp.full_like(Ax_raw, 10.0), jnp.zeros_like(Ax_raw)
+        )
     return Ax_raw
 
 
@@ -450,9 +456,9 @@ def test_refactor_vmap(dtype):
     num2 = klujax.refactor(Ai, Aj, Ax2, num, sym)
 
     # vmap solve_with_symbol over n_rhs axis (same pattern as test_3d_vmap)
-    x_sp = jax.vmap(
-        klujax.solve_with_symbol, (None, None, None, -1, None), -1
-    )(Ai, Aj, Ax2, b, sym)
+    x_sp = jax.vmap(klujax.solve_with_symbol, (None, None, None, -1, None), -1)(
+        Ai, Aj, Ax2, b, sym
+    )
 
     A2 = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax2)
     x = jax.vmap(jax.vmap(jsp.linalg.solve, (0, 0), 0), (None, -1), -1)(A2, b)
@@ -509,7 +515,9 @@ def test_refactor_grad(dtype):
         holomorphic=holomorphic,
     )(Ax2)
     jac_dense = jax.jacfwd(
-        lambda ax: jnp.linalg.solve(jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(ax), b2),
+        lambda ax: jnp.linalg.solve(
+            jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(ax), b2
+        ),
         holomorphic=holomorphic,
     )(Ax2)
     _log_and_test_equality(jac_sp, jac_dense)
@@ -519,10 +527,9 @@ def test_refactor_grad(dtype):
 
 
 def test_solve_with_symbol_jvp():
-
     Ai = jnp.array([0, 1], dtype=jnp.int32)
     Aj = jnp.array([0, 1], dtype=jnp.int32)
-    Ax = jnp.array([2.0, 4.0], dtype=jnp.float64) # Values
+    Ax = jnp.array([2.0, 4.0], dtype=jnp.float64)  # Values
     b = jnp.array([10.0, 20.0], dtype=jnp.float64)
 
     # Pre-compute symbolic factorization
@@ -544,6 +551,7 @@ def test_solve_with_symbol_jvp():
 
 # KLUHandleManager testing
 
+
 def use_handle(manager, x):
     """Simulates any function requiring a concrete handle (e.g. a C pointer)."""
     assert not isinstance(manager.handle, jax.core.Tracer), (
@@ -551,20 +559,24 @@ def use_handle(manager, x):
     )
     return x * 2.0
 
-def test_registration_traces_handle():
 
-    manager = klujax.KLUHandleManager(jnp.array(0xDEADBEEF, dtype=jnp.int64),
-                                      free_callable=lambda x: None)
+def test_registration_traces_handle():
+    manager = klujax.KLUHandleManager(
+        jnp.array(0xDEADBEEF, dtype=jnp.int64), free_callable=lambda x: None
+    )
 
     fn = jax.jit(use_handle)
     result = fn(manager, jnp.array(1.0))
     assert jnp.allclose(result, 2.0)
 
+
 def test_registration_handle_concrete_under_grad():
-    manager = klujax.KLUHandleManager(jnp.array(0xDEADBEEF, dtype=jnp.int64),
-                                      free_callable=lambda x: None)
+    manager = klujax.KLUHandleManager(
+        jnp.array(0xDEADBEEF, dtype=jnp.int64), free_callable=lambda x: None
+    )
     fn = jax.grad(lambda x: use_handle(manager, x))
     fn(jnp.array(1.0))
+
 
 def test_handle_survives_pytree_roundtrip():
     handle_val = jnp.array(0xDEADBEEF, dtype=jnp.int64)
@@ -576,9 +588,11 @@ def test_handle_survives_pytree_roundtrip():
     assert leaves == []
     assert int(reconstructed.handle) == int(handle_val)
 
+
 def test_registration_handle_concrete_under_vmap():
-    manager = klujax.KLUHandleManager(jnp.array(0xDEADBEEF, dtype=jnp.int64),
-                                      free_callable=lambda x: None)
+    manager = klujax.KLUHandleManager(
+        jnp.array(0xDEADBEEF, dtype=jnp.int64), free_callable=lambda x: None
+    )
     fn = jax.vmap(lambda x: use_handle(manager, x))
     result = fn(jnp.ones((4,)))
     assert jnp.allclose(result, 2.0)

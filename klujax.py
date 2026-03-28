@@ -4,12 +4,26 @@
 
 __version__ = "0.4.8"
 __author__ = "Floris Laporte"
-__all__ = ["analyze", "coalesce", "dot", "factor", "free_numeric", "free_symbolic", "refactor", "solve", "solve_with_numeric", "solve_with_symbol"]
+__all__ = [
+    "analyze",
+    "coalesce",
+    "dot",
+    "factor",
+    "free_numeric",
+    "free_symbolic",
+    "refactor",
+    "solve",
+    "solve_with_numeric",
+    "solve_with_symbol",
+]
 
 # Imports =============================================================================
 
 import os
 import sys
+from collections.abc import Callable
+from types import TracebackType
+from typing import Any
 
 import jax
 import jax.extend.core
@@ -20,8 +34,6 @@ from jax import lax
 from jax.core import ShapedArray
 from jax.interpreters import ad, batching, mlir
 from jaxtyping import Array
-from typing import Any, Callable, Optional, Type, Tuple, Union
-from types import TracebackType
 
 # Config ==============================================================================
 
@@ -156,12 +168,16 @@ def coalesce(
 
     return Ai, Aj, Ax.reshape(*shape[:-1], -1)
 
+
 # Split Solve pointer management =========================================================
+
 
 class KLUHandleManager:
     """RAII wrapper for KLU handles. Handles are freed on __del__ or __exit__."""
 
-    def __init__(self, handle: Array, free_callable: Callable, owner: bool = True) -> None:
+    def __init__(
+        self, handle: Array, free_callable: Callable, owner: bool = True
+    ) -> None:
         self.handle = handle
         self.free_callable = free_callable
         self._owner = owner
@@ -189,9 +205,9 @@ class KLUHandleManager:
 
     def __exit__(
         self,
-        exc_type: Optional[Type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> None:
         self.close()
 
@@ -199,19 +215,23 @@ class KLUHandleManager:
         if hasattr(self, "close"):
             self.close()
 
+
 def _klu_flatten(obj: KLUHandleManager) -> tuple[tuple[()], tuple[Array, Callable]]:
     # No leaves — handle and callable are both static aux data
     return (), (obj.handle, obj.free_callable)
 
 
-def _klu_unflatten(aux: tuple[Array, Callable], children: tuple[()]) -> KLUHandleManager:
+def _klu_unflatten(
+    aux: tuple[Array, Callable], children: tuple[()]
+) -> KLUHandleManager:
     handle, free_callable = aux
     return KLUHandleManager(handle, free_callable=free_callable, owner=False)
+
 
 jax.tree_util.register_pytree_node(KLUHandleManager, _klu_flatten, _klu_unflatten)
 
 
-def free_symbolic(symbolic: Union[KLUHandleManager, Array], dependency: Any = None) -> Array:
+def free_symbolic(symbolic: KLUHandleManager | Array, dependency: Any = None) -> Array:
     """Free the KLU symbolic analysis object.
 
     Args:
@@ -237,7 +257,8 @@ def free_symbolic(symbolic: Union[KLUHandleManager, Array], dependency: Any = No
         )
     return free_symbolic_p.bind(handle)
 
-def free_numeric(numeric: Union[KLUHandleManager, Array], dependency: Any = None) -> Array:
+
+def free_numeric(numeric: KLUHandleManager | Array, dependency: Any = None) -> Array:
     """Free the KLU numeric factorization object.
 
     Args:
@@ -263,7 +284,9 @@ def free_numeric(numeric: Union[KLUHandleManager, Array], dependency: Any = None
         )
     return free_numeric_p.bind(handle)
 
+
 # Split Solve routines =============================================================
+
 
 def analyze(Ai: Array, Aj: Array, n_col: int) -> KLUHandleManager:
     """Analyze the sparsity pattern of a matrix A.
@@ -282,11 +305,11 @@ def analyze(Ai: Array, Aj: Array, n_col: int) -> KLUHandleManager:
     raw_symbol = analyze_p.bind(Ai, Aj, jnp.int32(n_col))
     return KLUHandleManager(raw_symbol, free_symbolic, owner=True)
 
+
 def validate_numeric_solve(
     Ai: Array, Aj: Array, Ax: Array, b: Array
 ) -> tuple[Array, Array, Array, Array, tuple[int, ...]]:
     """Reduced set of validate_args for use with solve_with_symbol"""
-
     order = jnp.lexsort((Aj, Ai))
     Ai, Aj = Ai[order], Aj[order]
     Ax = Ax[..., order] if Ax.ndim == 2 else Ax[order]
@@ -320,25 +343,32 @@ def validate_numeric_solve(
 
     return Ai, Aj, Ax, b, shape
 
+
 @jax.jit
-def _solve_with_symbol_jit(Ai: Array, Aj: Array, Ax: Array, b: Array, sym_h: Array) -> Array:
+def _solve_with_symbol_jit(
+    Ai: Array, Aj: Array, Ax: Array, b: Array, sym_h: Array
+) -> Array:
     # Use the robust validator
     Ai, Aj, Ax, b, out_shape = validate_numeric_solve(Ai, Aj, Ax, b)
-    
+
     is_complex = any(x.dtype in COMPLEX_DTYPES for x in (Ax, b))
     prim = solve_with_symbol_c128 if is_complex else solve_with_symbol_f64
-    
+
     # Pass standardized arrays to the C++ extension
     x = prim.bind(
-        Ai, Aj,
+        Ai,
+        Aj,
         Ax.astype(jnp.complex128 if is_complex else jnp.float64),
         b.astype(jnp.complex128 if is_complex else jnp.float64),
-        sym_h.astype(jnp.uint64)
+        sym_h.astype(jnp.uint64),
     )
-    
+
     return x.reshape(*out_shape)
 
-def solve_with_symbol(Ai: Array, Aj: Array, Ax: Array, b: Array, symbolic: Union[KLUHandleManager, Array]) -> Array:
+
+def solve_with_symbol(
+    Ai: Array, Aj: Array, Ax: Array, b: Array, symbolic: KLUHandleManager | Array
+) -> Array:
     """Solve Ax=b using a pre-computed symbolic analysis.
 
     Args:
@@ -355,6 +385,7 @@ def solve_with_symbol(Ai: Array, Aj: Array, Ax: Array, b: Array, symbolic: Union
     handle = getattr(symbolic, "handle", symbolic)
     return _solve_with_symbol_jit(Ai, Aj, Ax, b, handle)
 
+
 @jax.jit
 def _factor_jit(Ai: Array, Aj: Array, Ax: Array, sym_h: Array) -> Array:
     dummy_b = jnp.zeros((1,), dtype=Ax.dtype)
@@ -362,7 +393,10 @@ def _factor_jit(Ai: Array, Aj: Array, Ax: Array, sym_h: Array) -> Array:
     prim = factor_c128 if Ax.dtype in COMPLEX_DTYPES else factor_f64
     return prim.bind(Ai, Aj, Ax, sym_h)
 
-def factor(Ai: Array, Aj: Array, Ax: Array, symbolic: Union[KLUHandleManager, Array]) -> KLUHandleManager:
+
+def factor(
+    Ai: Array, Aj: Array, Ax: Array, symbolic: KLUHandleManager | Array
+) -> KLUHandleManager:
     """Compute the numeric factorization of a matrix A given its symbolic analysis.
 
     Args:
@@ -379,6 +413,7 @@ def factor(Ai: Array, Aj: Array, Ax: Array, symbolic: Union[KLUHandleManager, Ar
     raw_numeric = _factor_jit(Ai, Aj, Ax, sym_h)
     return KLUHandleManager(raw_numeric, free_numeric, owner=True)
 
+
 @jax.jit
 def _refactor_jit(Ai: Array, Aj: Array, Ax: Array, sym_h: Array, num_h: Array) -> Array:
     dummy_b = jnp.zeros((1,), dtype=Ax.dtype)
@@ -386,7 +421,14 @@ def _refactor_jit(Ai: Array, Aj: Array, Ax: Array, sym_h: Array, num_h: Array) -
     prim = refactor_c128 if Ax.dtype in COMPLEX_DTYPES else refactor_f64
     return prim.bind(Ai, Aj, Ax, sym_h, num_h)
 
-def refactor(Ai: Array, Aj: Array, Ax: Array, numeric: Union[KLUHandleManager, Array], symbolic: Union[KLUHandleManager, Array]) -> KLUHandleManager:
+
+def refactor(
+    Ai: Array,
+    Aj: Array,
+    Ax: Array,
+    numeric: KLUHandleManager | Array,
+    symbolic: KLUHandleManager | Array,
+) -> KLUHandleManager:
     """Re-factorize matrix A numerically, reusing the symbolic analysis.
 
     Use when the sparsity pattern is unchanged but values have changed.
@@ -413,12 +455,20 @@ def refactor(Ai: Array, Aj: Array, Ax: Array, numeric: Union[KLUHandleManager, A
     raw_handle = _refactor_jit(Ai, Aj, Ax, sym_h, num_h)
     return KLUHandleManager(raw_handle, free_numeric, owner=False)
 
+
 @jax.jit
 def _solve_with_numeric_jit(num_h: Array, b: Array, sym_h: Array) -> Array:
-    prim = solve_with_numeric_c128 if b.dtype in COMPLEX_DTYPES else solve_with_numeric_f64
+    prim = (
+        solve_with_numeric_c128 if b.dtype in COMPLEX_DTYPES else solve_with_numeric_f64
+    )
     return prim.bind(sym_h.astype(jnp.uint64), num_h.astype(jnp.uint64), b)
 
-def solve_with_numeric(numeric: Union[KLUHandleManager, Array], b: Array, symbolic: Union[KLUHandleManager, Array]) -> Array:
+
+def solve_with_numeric(
+    numeric: KLUHandleManager | Array,
+    b: Array,
+    symbolic: KLUHandleManager | Array,
+) -> Array:
     """Solve Ax=b using a pre-computed numeric factorization.
 
     Args:
@@ -433,7 +483,7 @@ def solve_with_numeric(numeric: Union[KLUHandleManager, Array], b: Array, symbol
     num_h = getattr(numeric, "handle", numeric)
     sym_h = getattr(symbolic, "handle", symbolic)
     result = _solve_with_numeric_jit(num_h, b, sym_h)
-    
+
     # Auto-cleanup if the handle was created inside a JIT block.
     if isinstance(num_h, jax.core.Tracer) and isinstance(numeric, KLUHandleManager):
         free_numeric(numeric, dependency=result)
@@ -482,12 +532,16 @@ def solve_c128_impl(Ai: Array, Aj: Array, Ax: Array, x: Array) -> Array:
 
 
 @solve_with_symbol_f64.def_impl
-def solve_with_symbol_f64_impl(Ai: Array, Aj: Array, Ax: Array, b: Array, symbolic: Array) -> Array:
+def solve_with_symbol_f64_impl(
+    Ai: Array, Aj: Array, Ax: Array, b: Array, symbolic: Array
+) -> Array:
     return general_impl("solve_with_symbol_f64", Ai, Aj, Ax, b, symbolic)
 
 
 @solve_with_symbol_c128.def_impl
-def solve_with_symbol_c128_impl(Ai: Array, Aj: Array, Ax: Array, b: Array, symbolic: Array) -> Array:
+def solve_with_symbol_c128_impl(
+    Ai: Array, Aj: Array, Ax: Array, b: Array, symbolic: Array
+) -> Array:
     return general_impl("solve_with_symbol_c128", Ai, Aj, Ax, b, symbolic)
 
 
@@ -502,11 +556,13 @@ def factor_f64_impl(Ai, Aj, Ax, symbolic):
     call = jax.ffi.ffi_call("factor_f64", jax.ShapeDtypeStruct((n_lhs,), jnp.uint64))
     return call(Ai, Aj, Ax, symbolic)
 
+
 @factor_c128.def_impl
 def factor_c128_impl(Ai, Aj, Ax, symbolic):
     n_lhs = Ax.shape[0]
     call = jax.ffi.ffi_call("factor_c128", jax.ShapeDtypeStruct((n_lhs,), jnp.uint64))
     return call(Ai, Aj, Ax, symbolic)
+
 
 @refactor_f64.def_impl
 def refactor_f64_impl(Ai, Aj, Ax, symbolic, numeric):
@@ -514,24 +570,33 @@ def refactor_f64_impl(Ai, Aj, Ax, symbolic, numeric):
     call = jax.ffi.ffi_call("refactor_f64", jax.ShapeDtypeStruct((n_lhs,), jnp.uint64))
     return call(Ai, Aj, Ax, symbolic, numeric)
 
+
 @refactor_c128.def_impl
 def refactor_c128_impl(Ai, Aj, Ax, symbolic, numeric):
     n_lhs = Ax.shape[0]
     call = jax.ffi.ffi_call("refactor_c128", jax.ShapeDtypeStruct((n_lhs,), jnp.uint64))
     return call(Ai, Aj, Ax, symbolic, numeric)
 
+
 @solve_with_numeric_f64.def_impl
 def solve_with_numeric_f64_impl(symbolic, numeric, b):
-    call = jax.ffi.ffi_call("solve_with_numeric_f64", jax.ShapeDtypeStruct(b.shape, b.dtype))
+    call = jax.ffi.ffi_call(
+        "solve_with_numeric_f64", jax.ShapeDtypeStruct(b.shape, b.dtype)
+    )
     return call(symbolic, numeric, b)
+
 
 @solve_with_numeric_c128.def_impl
 def solve_with_numeric_c128_impl(symbolic, numeric, b):
-    call = jax.ffi.ffi_call("solve_with_numeric_c128", jax.ShapeDtypeStruct(b.shape, b.dtype))
+    call = jax.ffi.ffi_call(
+        "solve_with_numeric_c128", jax.ShapeDtypeStruct(b.shape, b.dtype)
+    )
     return call(symbolic, numeric, b)
 
 
-def general_impl(name: str, Ai: Array, Aj: Array, Ax: Array, x: Array, *args: Array) -> Array:
+def general_impl(
+    name: str, Ai: Array, Aj: Array, Ax: Array, x: Array, *args: Array
+) -> Array:
     call = jax.ffi.ffi_call(
         name,
         jax.ShapeDtypeStruct(x.shape, x.dtype),
@@ -595,7 +660,9 @@ jax.ffi.register_ffi_target(
     platform="cpu",
 )
 
-solve_with_symbol_f64_low = mlir.lower_fun(solve_with_symbol_f64_impl, multiple_results=False)
+solve_with_symbol_f64_low = mlir.lower_fun(
+    solve_with_symbol_f64_impl, multiple_results=False
+)
 mlir.register_lowering(solve_with_symbol_f64, solve_with_symbol_f64_low)
 
 jax.ffi.register_ffi_target(
@@ -604,7 +671,9 @@ jax.ffi.register_ffi_target(
     platform="cpu",
 )
 
-solve_with_symbol_c128_low = mlir.lower_fun(solve_with_symbol_c128_impl, multiple_results=False)
+solve_with_symbol_c128_low = mlir.lower_fun(
+    solve_with_symbol_c128_impl, multiple_results=False
+)
 mlir.register_lowering(solve_with_symbol_c128, solve_with_symbol_c128_low)
 
 jax.ffi.register_ffi_target(
@@ -619,6 +688,7 @@ jax.ffi.register_ffi_target(
     platform="cpu",
 )
 
+
 @free_numeric_p.def_impl
 def free_numeric_impl(numeric):
     call = jax.ffi.ffi_call("free_numeric", jax.ShapeDtypeStruct((), jnp.int32))
@@ -630,13 +700,16 @@ def free_symbolic_impl(symbolic):
     call = jax.ffi.ffi_call("free_symbolic", jax.ShapeDtypeStruct((), jnp.int32))
     return call(symbolic)
 
+
 @free_numeric_p.def_abstract_eval
 def free_numeric_abstract_eval(numeric):
     return ShapedArray((), jnp.int32)
 
+
 @free_symbolic_p.def_abstract_eval
 def free_symbolic_abstract_eval(symbolic):
     return ShapedArray((), jnp.int32)
+
 
 jax.ffi.register_ffi_target("factor_f64", klujax_cpp.factor_f64(), platform="cpu")
 factor_f64_low = mlir.lower_fun(factor_f64_impl, multiple_results=False)
@@ -654,12 +727,20 @@ jax.ffi.register_ffi_target("refactor_c128", klujax_cpp.refactor_c128(), platfor
 refactor_c128_low = mlir.lower_fun(refactor_c128_impl, multiple_results=False)
 mlir.register_lowering(refactor_c128, refactor_c128_low)
 
-jax.ffi.register_ffi_target("solve_with_numeric_f64", klujax_cpp.solve_with_numeric_f64(), platform="cpu")
-solve_with_numeric_f64_low = mlir.lower_fun(solve_with_numeric_f64_impl, multiple_results=False)
+jax.ffi.register_ffi_target(
+    "solve_with_numeric_f64", klujax_cpp.solve_with_numeric_f64(), platform="cpu"
+)
+solve_with_numeric_f64_low = mlir.lower_fun(
+    solve_with_numeric_f64_impl, multiple_results=False
+)
 mlir.register_lowering(solve_with_numeric_f64, solve_with_numeric_f64_low)
 
-jax.ffi.register_ffi_target("solve_with_numeric_c128", klujax_cpp.solve_with_numeric_c128(), platform="cpu")
-solve_with_numeric_c128_low = mlir.lower_fun(solve_with_numeric_c128_impl, multiple_results=False)
+jax.ffi.register_ffi_target(
+    "solve_with_numeric_c128", klujax_cpp.solve_with_numeric_c128(), platform="cpu"
+)
+solve_with_numeric_c128_low = mlir.lower_fun(
+    solve_with_numeric_c128_impl, multiple_results=False
+)
 mlir.register_lowering(solve_with_numeric_c128, solve_with_numeric_c128_low)
 
 free_numeric_low = mlir.lower_fun(free_numeric_impl, multiple_results=False)
@@ -677,7 +758,9 @@ mlir.register_lowering(free_symbolic_p, free_symbolic_low)
 @solve_c128.def_abstract_eval
 @solve_with_symbol_f64.def_abstract_eval
 @solve_with_symbol_c128.def_abstract_eval
-def general_abstract_eval(Ai: Array, Aj: Array, Ax: Array, b: Array, *args: Array) -> ShapedArray:  # noqa: ARG001
+def general_abstract_eval(
+    Ai: Array, Aj: Array, Ax: Array, b: Array, *args: Array
+) -> ShapedArray:
     return ShapedArray(b.shape, b.dtype)
 
 
@@ -690,15 +773,18 @@ def analyze_abstract_eval(Ai: Array, Aj: Array, n_col: Array) -> ShapedArray:  #
 def free_symbolic_abstract_eval(symbolic: Array) -> None:  # noqa: ARG001
     return None
 
+
 @factor_f64.def_abstract_eval
 @factor_c128.def_abstract_eval
 def factor_abstract_eval(Ai, Aj, Ax, symbolic):
     return ShapedArray((Ax.shape[0],), jnp.uint64)
 
+
 @refactor_f64.def_abstract_eval
 @refactor_c128.def_abstract_eval
 def refactor_abstract_eval(Ai, Aj, Ax, symbolic, numeric):
     return ShapedArray((Ax.shape[0],), jnp.uint64)
+
 
 @solve_with_numeric_f64.def_abstract_eval
 @solve_with_numeric_c128.def_abstract_eval
@@ -835,7 +921,9 @@ def solve_with_symbol_f64_vmap(
     vector_arg_values: tuple[Array, Array, Array, Array, Array],
     batch_axes: tuple[int | None, int | None, int | None, int | None, int | None],
 ) -> tuple[Array, int]:
-    return general_vmap_with_symbol(solve_with_symbol_f64, vector_arg_values, batch_axes)
+    return general_vmap_with_symbol(
+        solve_with_symbol_f64, vector_arg_values, batch_axes
+    )
 
 
 batching.primitive_batchers[solve_with_symbol_f64] = solve_with_symbol_f64_vmap
@@ -845,7 +933,9 @@ def solve_with_symbol_c128_vmap(
     vector_arg_values: tuple[Array, Array, Array, Array, Array],
     batch_axes: tuple[int | None, int | None, int | None, int | None, int | None],
 ) -> tuple[Array, int]:
-    return general_vmap_with_symbol(solve_with_symbol_c128, vector_arg_values, batch_axes)
+    return general_vmap_with_symbol(
+        solve_with_symbol_c128, vector_arg_values, batch_axes
+    )
 
 
 batching.primitive_batchers[solve_with_symbol_c128] = solve_with_symbol_c128_vmap
@@ -855,7 +945,9 @@ def solve_with_numeric_f64_vmap(
     vector_arg_values: tuple[Array, Array, Array],
     batch_axes: tuple[int | None, int | None, int | None],
 ) -> tuple[Array, int]:
-    return general_vmap_with_numeric(solve_with_numeric_f64, vector_arg_values, batch_axes)
+    return general_vmap_with_numeric(
+        solve_with_numeric_f64, vector_arg_values, batch_axes
+    )
 
 
 batching.primitive_batchers[solve_with_numeric_f64] = solve_with_numeric_f64_vmap
@@ -865,7 +957,9 @@ def solve_with_numeric_c128_vmap(
     vector_arg_values: tuple[Array, Array, Array],
     batch_axes: tuple[int | None, int | None, int | None],
 ) -> tuple[Array, int]:
-    return general_vmap_with_numeric(solve_with_numeric_c128, vector_arg_values, batch_axes)
+    return general_vmap_with_numeric(
+        solve_with_numeric_c128, vector_arg_values, batch_axes
+    )
 
 
 batching.primitive_batchers[solve_with_numeric_c128] = solve_with_numeric_c128_vmap
@@ -987,7 +1081,7 @@ def general_vmap_with_symbol(
     if aAj is not None:
         msg = "Aj cannot be vectorized."
         raise ValueError(msg)
-    
+
     if asymbolic is not None:
         msg = "symbolic handle cannot be vectorized."
         raise ValueError(msg)
@@ -1044,11 +1138,11 @@ def general_vmap_with_numeric(
 ) -> tuple[Array, int]:
     symbolic, numeric, b = vector_arg_values
     asymbolic, anumeric, ab = batch_axes
-    
+
     if asymbolic is not None:
         msg = "symbolic handle cannot be vectorized."
         raise ValueError(msg)
-    
+
     # numeric and b should batch together
     if anumeric is not None and ab is not None:
         if numeric.ndim != 2 or b.ndim < 2:
@@ -1070,7 +1164,9 @@ def general_vmap_with_numeric(
 
     if anumeric is not None:
         if numeric.ndim != 2:
-            msg = f"numeric should be 2D when vectorizing over it. Got: {numeric.shape=}."
+            msg = (
+                f"numeric should be 2D when vectorizing over it. Got: {numeric.shape=}."
+            )
             raise ValueError(msg)
         numeric = jnp.moveaxis(numeric, anumeric, 0)
         batch = numeric.shape[0]
@@ -1089,7 +1185,7 @@ def general_vmap_with_numeric(
             b = b.reshape(*b.shape[:-2], b.shape[-2] * b.shape[-1])
         # b.ndim == 2: shape is (n, batch) — pass directly as multi-RHS
         return prim.bind(symbolic, numeric, b).reshape(*shape), len(shape) - 1
-    
+
     msg = "vmap failed. Please select an axis to vectorize over."
     raise ValueError(msg)
 
@@ -1174,7 +1270,9 @@ def general_vmap_refactor(
 
     if anumeric is not None:
         if numeric.ndim != 2:
-            msg = f"numeric should be 2D when vectorizing over it. Got: {numeric.shape=}."
+            msg = (
+                f"numeric should be 2D when vectorizing over it. Got: {numeric.shape=}."
+            )
             raise ValueError(msg)
         numeric = jnp.moveaxis(numeric, anumeric, 0)
         batch, n_lhs = numeric.shape
@@ -1399,12 +1497,13 @@ def validate_args(  # noqa: C901,PLR0912
 
 # Differentiation rules for solve_with_symbol =================================
 
+
 def solve_with_symbol_value_and_jvp(
     prim_solve: jax.extend.core.Primitive,
     prim_dot: jax.extend.core.Primitive,
-    arg_values: Tuple[Array, Array, Array, Array, Array],
-    arg_tangents: Tuple[Any, Any, Any, Any, Any],
-) -> Tuple[Array, Array]:
+    arg_values: tuple[Array, Array, Array, Array, Array],
+    arg_tangents: tuple[Any, Any, Any, Any, Any],
+) -> tuple[Array, Array]:
     """Jacobian-vector product rule for `solve_with_symbol`.
 
     The rule for the JVP of a linear solve `x = A^-1 * b` is:
@@ -1425,6 +1524,7 @@ def solve_with_symbol_value_and_jvp(
 
     Returns:
         A tuple containing the primal output `x` and the tangent output `dx`.
+
     """
     Ai, Aj, Ax, b, symbolic = arg_values
     t_Ai, t_Aj, t_Ax, t_b, t_symbolic = arg_tangents
@@ -1441,17 +1541,18 @@ def solve_with_symbol_value_and_jvp(
             rhs = rhs - dAx
 
     if isinstance(rhs, ad.Zero):
-        dx = lax.zeros_like_array(x)
+        dx = jnp.zeros_like(x)
     else:
         dx = prim_solve.bind(Ai, Aj, Ax, rhs, symbolic)
 
     return x, dx
 
+
 # Register JVP for Float64
 def solve_with_symbol_f64_value_and_jvp(
-    arg_values: Tuple[Array, Array, Array, Array, Array],
-    arg_tangents: Tuple[Any, Any, Any, Any, Any],
-) -> Tuple[Array, Array]:
+    arg_values: tuple[Array, Array, Array, Array, Array],
+    arg_tangents: tuple[Any, Any, Any, Any, Any],
+) -> tuple[Array, Array]:
     """JVP rule for float64 solve_with_symbol."""
     return solve_with_symbol_value_and_jvp(
         solve_with_symbol_f64,
@@ -1460,13 +1561,15 @@ def solve_with_symbol_f64_value_and_jvp(
         arg_tangents,
     )
 
+
 ad.primitive_jvps[solve_with_symbol_f64] = solve_with_symbol_f64_value_and_jvp
+
 
 # Register JVP for Complex128
 def solve_with_symbol_c128_value_and_jvp(
-    arg_values: Tuple[Array, Array, Array, Array, Array],
-    arg_tangents: Tuple[Any, Any, Any, Any, Any],
-) -> Tuple[Array, Array]:
+    arg_values: tuple[Array, Array, Array, Array, Array],
+    arg_tangents: tuple[Any, Any, Any, Any, Any],
+) -> tuple[Array, Array]:
     """JVP rule for complex128 solve_with_symbol."""
     return solve_with_symbol_value_and_jvp(
         solve_with_symbol_c128,
@@ -1474,6 +1577,7 @@ def solve_with_symbol_c128_value_and_jvp(
         arg_values,
         arg_tangents,
     )
+
 
 ad.primitive_jvps[solve_with_symbol_c128] = solve_with_symbol_c128_value_and_jvp
 
@@ -1516,12 +1620,20 @@ def solve_with_symbol_transpose(
 
     return t_Ai, t_Aj, t_Ax, t_b, None
 
+
 def solve_with_symbol_f64_transpose(ct, Ai, Aj, Ax, b, symbolic):
-    return solve_with_symbol_transpose(solve_with_symbol_f64, ct, Ai, Aj, Ax, b, symbolic)
+    return solve_with_symbol_transpose(
+        solve_with_symbol_f64, ct, Ai, Aj, Ax, b, symbolic
+    )
+
 
 ad.primitive_transposes[solve_with_symbol_f64] = solve_with_symbol_f64_transpose
 
+
 def solve_with_symbol_c128_transpose(ct, Ai, Aj, Ax, b, symbolic):
-    return solve_with_symbol_transpose(solve_with_symbol_c128, ct, Ai, Aj, Ax, b, symbolic)
+    return solve_with_symbol_transpose(
+        solve_with_symbol_c128, ct, Ai, Aj, Ax, b, symbolic
+    )
+
 
 ad.primitive_transposes[solve_with_symbol_c128] = solve_with_symbol_c128_transpose

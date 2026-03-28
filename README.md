@@ -90,13 +90,14 @@ Output:
 
 For high-performance applications like transient simulations or iterative solvers, you should avoid using the high-level `klujax.solve` function. The `klujax.solve` is in fact a wrapper around three distinct parts of the KLU algorithm:
 
-1) **Analyze (Symbolic)**: Inspects the sparsity pattern ($A_i, A_j$) to find optimal permutations and block triangular forms. This depends only on the structure of the matrix.
-2) **Factorize (Numeric)**: Performs the actual LU decomposition. This depends on the values ($A_x$) and requires a symbolic handle.
-3) **Solve (Numeric)**: Executes forward and backward substitution to find $x$. This depends on the right-hand side ($b$) and requires a numeric handle.
+1. **Analyze (Symbolic)**: Inspects the sparsity pattern ($A_i, A_j$) to find optimal permutations and block triangular forms. This depends only on the structure of the matrix.
+2. **Factorize (Numeric)**: Performs the actual LU decomposition. This depends on the values ($A_x$) and requires a symbolic handle.
+3. **Solve (Numeric)**: Executes forward and backward substitution to find $x$. This depends on the right-hand side ($b$) and requires a numeric handle.
 
 Significant performance gains are achieved by hoisting the "Analysis" or "Factorization" steps out of your inner loops.
 
 ### 1. High-Performance Transient Pattern (Reusing Symbolic)
+
 In a simulation where the sparsity pattern is constant but the values ($A_x$) and right-hand side ($b$) change, you should perform the expensive `analyze` step exactly once outside your JIT loop.
 
 ```python
@@ -122,7 +123,6 @@ for t in range(steps):
 
 If you need to solve the same system with many different $b$ vectors while the matrix $A$ remains constant, you can further split the numeric factorization. This is often performed in a modified Newton-Raphson loop where the computationally expensive jacobian+factorization is only evaluated once and the **solve** stage is deemed "cheap" in comparison
 
-
 ```python
 # Factorize the matrix once
 numeric = klujax.factor(Ai, Aj, Ax, symbolic)
@@ -137,16 +137,19 @@ for i in range(100):
 ```
 
 ### Lifecycle & Pointer Pitfalls
+
 Because `klujax.analyze` and `klujax.factor` generate `KLUHandleManager` objects which wrap low level C++ pointers, there are strict rules for avoiding memory leaks and segmentation faults.
 
 #### The "Ghost Pointer" Problem inside JIT:
+
 JAX's jit works by tracing your code. During tracing, Python objects like the `KLUHandleManager` are converted into symbolic Tracers.
 
-* Outside JIT: The `KLUHandleManager` uses RAII (Resource Acquisition Is Initialization). When the Python variable is deleted or goes out of scope, the C++ memory is freed automatically.
+- Outside JIT: The `KLUHandleManager` uses RAII (Resource Acquisition Is Initialization). When the Python variable is deleted or goes out of scope, the C++ memory is freed automatically.
 
-* Inside JIT: If you create a handle (via `analyze` or `factor`) **inside** a JIT-compiled function, the Python manager is "lost" during the conversion to XLA. XLA will allocate the C++ memory at runtime, but it will **never** call the free function.
+- Inside JIT: If you create a handle (via `analyze` or `factor`) **inside** a JIT-compiled function, the Python manager is "lost" during the conversion to XLA. XLA will allocate the C++ memory at runtime, but it will **never** call the free function.
 
 #### The Fix: Explicit Destruction with Dependencies
+
 If you must create a handle inside JIT, you must manually call `free_symbolic` or `free_numeric` inside that same function. To prevent the compiler from freeing the pointer before the solve is finished, you must pass the solution as a dependency.
 
 ```python
@@ -154,23 +157,23 @@ If you must create a handle inside JIT, you must manually call `free_symbolic` o
 def dynamic_solve(Ai, Aj, Ax, b):
     # 1. Born inside JIT (No automatic cleanup!)
     sym = klujax.analyze(Ai, Aj, 5)
-    
+
     # 2. Compute solution
     x = klujax.solve_with_symbol(Ai, Aj, Ax, b, sym)
-    
+
     # 3. CRITICAL: Force XLA to free 'sym' ONLY AFTER 'x' is ready
     klujax.free_symbolic(sym, dependency=x)
-    
+
     return x
 ```
 
 #### Summary of Best Practices
-1) **Hoist Creations**: Always try to call analyze or factor outside of JIT blocks.
 
-2) **One Manager, One Free**: Do not manually call free_symbolic(manager) and then let the manager go out of scope; it will attempt a double-free (though the library has safeguards to prevent a crash).
+1. **Hoist Creations**: Always try to call analyze or factor outside of JIT blocks.
 
-3) **Check for Warnings**: If you see a UserWarning: Allocating KLU handle inside JIT, your code is currently leaking memory. Use the dependency pattern shown above to fix it.
+2. **One Manager, One Free**: Do not manually call free_symbolic(manager) and then let the manager go out of scope; it will attempt a double-free (though the library has safeguards to prevent a crash).
 
+3. **Check for Warnings**: If you see a UserWarning: Allocating KLU handle inside JIT, your code is currently leaking memory. Use the dependency pattern shown above to fix it.
 
 ## Installation
 
