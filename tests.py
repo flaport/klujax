@@ -546,8 +546,8 @@ def test_solve_with_symbol_jvp():
 
     # This triggers the JVP rule lookup
     primals, tangents = jax.jvp(solve_step, (Ax, b), (tangent_Ax, tangent_b))
-    assert primals.shape == (2,)  # noqa: S101
-    assert tangents.shape == (2,)  # noqa: S101
+    assert primals.shape == (2,)
+    assert tangents.shape == (2,)
 
 
 # KLUHandleManager testing

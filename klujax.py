@@ -171,14 +171,17 @@ def coalesce(
     return Ai, Aj, Ax.reshape(*shape[:-1], -1)
 
 
-# Split Solve pointer management =========================================================
+# Split Solve pointer management =====================================================
 
 
 class KLUHandleManager:
     """RAII wrapper for KLU handles. Handles are freed on __del__ or __exit__."""
 
     def __init__(
-        self, handle: Array, free_callable: Callable, owner: bool = True
+        self,
+        handle: Array,
+        free_callable: Callable,
+        owner: bool = True,  # noqa: FBT001, FBT002
     ) -> None:
         self.handle = handle
         self.free_callable = free_callable
@@ -231,7 +234,7 @@ def _klu_unflatten(
 jax.tree_util.register_pytree_node(KLUHandleManager, _klu_flatten, _klu_unflatten)
 
 
-def free_symbolic(symbolic: KLUHandleManager | Array, dependency: Any = None) -> Array:
+def free_symbolic(symbolic: KLUHandleManager | Array, dependency: Any = None) -> Array:  # noqa: ANN401
     """Free the KLU symbolic analysis object.
 
     Args:
@@ -250,7 +253,7 @@ def free_symbolic(symbolic: KLUHandleManager | Array, dependency: Any = None) ->
     if isinstance(handle, jax.core.Tracer) and dependency is not None:
         token = jax.tree_util.tree_leaves(dependency)[0]
         return lax.cond(
-            jnp.array(True),
+            jnp.array(True),  # noqa: FBT003
             lambda ops: free_symbolic_p.bind(ops[0]),
             lambda _: jnp.array(0, dtype=jnp.int32),
             operand=(handle, token),
@@ -258,7 +261,7 @@ def free_symbolic(symbolic: KLUHandleManager | Array, dependency: Any = None) ->
     return free_symbolic_p.bind(handle)
 
 
-def free_numeric(numeric: KLUHandleManager | Array, dependency: Any = None) -> Array:
+def free_numeric(numeric: KLUHandleManager | Array, dependency: Any = None) -> Array:  # noqa: ANN401
     """Free the KLU numeric factorization object.
 
     Args:
@@ -277,7 +280,7 @@ def free_numeric(numeric: KLUHandleManager | Array, dependency: Any = None) -> A
     if isinstance(handle, jax.core.Tracer) and dependency is not None:
         token = jax.tree_util.tree_leaves(dependency)[0]
         return lax.cond(
-            jnp.array(True),
+            jnp.array(True),  # noqa: FBT003
             lambda ops: free_numeric_p.bind(ops[0]),
             lambda _: jnp.array(0, dtype=jnp.int32),
             operand=(handle, token),
@@ -444,11 +447,13 @@ def refactor(
         Ai: [n_nz; int32]: the row indices of the sparse matrix A
         Aj: [n_nz; int32]: the column indices of the sparse matrix A
         Ax: [n_lhs? x n_nz; float64|complex128]: the values of the sparse matrix A
-        numeric: [KLUHandleManager|Array]: existing numeric factorization (modified in-place)
+        numeric: [KLUHandleManager|Array]: existing numeric factorization
+            (modified in-place)
         symbolic: [KLUHandleManager|Array]: the symbolic analysis object or handle
 
     Returns:
-        numeric: [KLUHandleManager]: the updated numeric handle (same pointer, for XLA dep tracking)
+        numeric: [KLUHandleManager]: the updated numeric handle
+            (same pointer, for XLA dep tracking)
 
     """
     num_h = getattr(numeric, "handle", numeric)
@@ -707,11 +712,6 @@ def free_numeric_abstract_eval(numeric):
     return ShapedArray((), jnp.int32)
 
 
-@free_symbolic_p.def_abstract_eval
-def free_symbolic_abstract_eval(symbolic):
-    return ShapedArray((), jnp.int32)
-
-
 jax.ffi.register_ffi_target("factor_f64", klujax_cpp.factor_f64(), platform="cpu")
 factor_f64_low = mlir.lower_fun(factor_f64_impl, multiple_results=False)
 mlir.register_lowering(factor_f64, factor_f64_low)
@@ -766,12 +766,12 @@ def general_abstract_eval(
 
 
 @analyze_p.def_abstract_eval
-def analyze_abstract_eval(Ai: Array, Aj: Array, n_col: Array) -> ShapedArray:  # noqa: ARG001
+def analyze_abstract_eval(Ai: Array, Aj: Array, n_col: Array) -> ShapedArray:
     return ShapedArray((), jnp.uint64)
 
 
 @free_symbolic_p.def_abstract_eval
-def free_symbolic_abstract_eval(symbolic: Array) -> None:  # noqa: ARG001
+def free_symbolic_abstract_eval(symbolic: Array) -> None:
     return None
 
 

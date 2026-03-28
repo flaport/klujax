@@ -86,7 +86,12 @@ ignore = [
   "ERA",  # eradicate
   "PLR2004",  # magic-value-comparison
   "COM812",  # missing-trailing-comma
-  "D203"  # one-blank-line-before-class
+  "D203",  # one-blank-line-before-class
+  "ANN001",  # missing-type-annotation
+  "ANN202",  # missing-return-type-annotation
+  "ARG001",  # unused-function-argument
+  "ARG005",  # unused-lambda-argument
+  "S101"  # assert-used
 ]
 select = ["ALL"]
 
@@ -94,7 +99,7 @@ select = ["ALL"]
 ".github/run_tests.py" = ["INP", "PTH", "T201", "S603", "S607"]
 "benchmark.py" = ["INP001", "T201"]
 "setup.py" = ["PTH", "ANN", "D101", "D102"]
-"tests.py" = ["D", "INP001", "ANN", "T201", "E501", "N806"]
+"tests.py" = ["D", "INP001", "ANN", "T201", "E501", "N806", "SLF001"]
 
 [tool.setuptools.package-data]
 "*" = [
