@@ -13,18 +13,18 @@ Solve **Ax = b** using a pre-computed symbolic analysis. This skips the expensiv
 
 ## Parameters
 
-| Parameter | Type | Shape | Description |
-|-----------|------|-------|-------------|
-| `Ai` | int32 | `(n_nz,)` | Row indices |
-| `Aj` | int32 | `(n_nz,)` | Column indices |
-| `Ax` | float64 or complex128 | `(n_lhs?, n_nz)` | Matrix values |
-| `b` | float64 or complex128 | `(n_lhs?, n_col, n_rhs?)` | Right-hand side |
-| `symbolic` | KLUHandleManager | — | Handle from [analyze](analyze.md) |
+| Parameter  | Type                  | Shape                     | Description                       |
+| ---------- | --------------------- | ------------------------- | --------------------------------- |
+| `Ai`       | int32                 | `(n_nz,)`                 | Row indices                       |
+| `Aj`       | int32                 | `(n_nz,)`                 | Column indices                    |
+| `Ax`       | float64 or complex128 | `(n_lhs?, n_nz)`          | Matrix values                     |
+| `b`        | float64 or complex128 | `(n_lhs?, n_col, n_rhs?)` | Right-hand side                   |
+| `symbolic` | KLUHandleManager      | —                         | Handle from [analyze](analyze.md) |
 
 ## Returns
 
-| Type | Shape | Description |
-|------|-------|-------------|
+| Type  | Shape             | Description        |
+| ----- | ----------------- | ------------------ |
 | Array | Same shape as `b` | The solution **x** |
 
 ## How It Fits In
@@ -32,10 +32,10 @@ Solve **Ax = b** using a pre-computed symbolic analysis. This skips the expensiv
 ```mermaid
 flowchart LR
     subgraph "Once (outside loop)"
-        AN["analyze(Ai, Aj, n_col)"] --> SYM["symbolic"]
+        AN["analyze#40;Ai, Aj, n_col#41;"] --> SYM["symbolic"]
     end
     subgraph "Every iteration"
-        SYM --> SWS["solve_with_symbol\n(Ai, Aj, Ax_t, b_t, symbolic)"]:::active
+        SYM --> SWS["solve_with_symbol\n#40;Ai, Aj, Ax_t, b_t, symbolic#41;"]:::active
         AX["Ax_t"] --> SWS
         B["b_t"] --> SWS
         SWS --> X["x_t"]
@@ -91,9 +91,9 @@ The analyze step is typically the most expensive part. Skipping it can give subs
 
 ## JAX Features
 
-| Feature | Supported |
-|---------|-----------|
-| `jax.jit` | Yes |
-| `jax.grad` | Yes (w.r.t. `Ax` and `b`) |
-| `jax.jacfwd` | Yes |
-| `jax.vmap` | Yes |
+| Feature      | Supported                 |
+| ------------ | ------------------------- |
+| `jax.jit`    | Yes                       |
+| `jax.grad`   | Yes (w.r.t. `Ax` and `b`) |
+| `jax.jacfwd` | Yes                       |
+| `jax.vmap`   | Yes                       |

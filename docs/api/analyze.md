@@ -13,27 +13,27 @@ Perform symbolic analysis on the sparsity pattern of a sparse matrix. This is th
 
 ## Parameters
 
-| Parameter | Type | Shape | Description |
-|-----------|------|-------|-------------|
-| `Ai` | int32 | `(n_nz,)` | Row indices of nonzero entries |
-| `Aj` | int32 | `(n_nz,)` | Column indices of nonzero entries |
-| `n_col` | int | scalar | Number of rows/columns in the matrix |
+| Parameter | Type  | Shape     | Description                          |
+| --------- | ----- | --------- | ------------------------------------ |
+| `Ai`      | int32 | `(n_nz,)` | Row indices of nonzero entries       |
+| `Aj`      | int32 | `(n_nz,)` | Column indices of nonzero entries    |
+| `n_col`   | int   | scalar    | Number of rows/columns in the matrix |
 
 ## Returns
 
-| Type | Description |
-|------|-------------|
+| Type               | Description                                                     |
+| ------------------ | --------------------------------------------------------------- |
 | `KLUHandleManager` | A handle wrapping a C++ pointer to the symbolic analysis result |
 
 ## How It Fits In
 
 ```mermaid
 flowchart TD
-    AN["analyze(Ai, Aj, n_col)"]:::active --> SYM["symbolic handle"]
-    SYM --> F["factor(Ai, Aj, Ax, symbolic)"]
-    SYM --> SWS["solve_with_symbol(Ai, Aj, Ax, b, symbolic)"]
+    AN["analyze#40;Ai, Aj, n_col#41;"]:::active --> SYM["symbolic handle"]
+    SYM --> F["factor#40;Ai, Aj, Ax, symbolic#41;"]
+    SYM --> SWS["solve_with_symbol#40;Ai, Aj, Ax, b, symbolic#41;"]
     F --> NUM["numeric handle"]
-    NUM --> SWN["solve_with_numeric(numeric, b, symbolic)"]
+    NUM --> SWN["solve_with_numeric#40;numeric, b, symbolic#41;"]
 
     classDef active fill:#f59e0b,color:#fff,stroke:none
 ```
@@ -85,7 +85,7 @@ symbolic.close()
 ```
 
 !!! warning "Inside JIT"
-    If you call `analyze` inside a `jax.jit`-compiled function, the handle **will not** be freed automatically. You must call [free_symbolic](free.md) explicitly. See [Memory Management](../advanced/memory-management.md) for details.
+If you call `analyze` inside a `jax.jit`-compiled function, the handle **will not** be freed automatically. You must call [free_symbolic](free.md) explicitly. See [Memory Management](../advanced/memory-management.md) for details.
 
 !!! note "Not JIT-compiled itself"
-    `analyze` is a Python-side function — it runs eagerly on the CPU. Call it **outside** your JIT-compiled loops.
+`analyze` is a Python-side function — it runs eagerly on the CPU. Call it **outside** your JIT-compiled loops.

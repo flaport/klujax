@@ -38,7 +38,7 @@ print(x)  # [1. 2. 3. 4. 5.]
 
 ```mermaid
 flowchart LR
-    A["Sparse Matrix A\n(Ai, Aj, Ax)"] --> solve["klujax.solve"]
+    A["Sparse Matrix A\n#40;Ai, Aj, Ax#41;"] --> solve["klujax.solve"]
     B["Right-hand side b"] --> solve
     solve --> X["Solution x"]
     style solve fill:#6366f1,color:#fff,stroke:none

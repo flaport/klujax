@@ -49,9 +49,8 @@ markdown_extensions:
       custom_fences:
         - name: mermaid
           class: mermaid
-          format: !!python/name:pymdownx.superfences.fence_code_format
-  - pymdownx.tabbed:
-      alternate_style: true
+          format: !!python/name:pymdownx.superfences.fence_div_format
+  - pymdownx.blocks.tab
   - pymdownx.details
   - pymdownx.arithmatex:
       generic: true

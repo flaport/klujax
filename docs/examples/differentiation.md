@@ -29,7 +29,7 @@ grad_Ax, grad_b = jax.grad(loss, argnums=(0, 1))(Ax, b)
 
 ```mermaid
 flowchart LR
-    Ax["Ax"] --> solve["solve"] --> x["x"] --> loss["sum(x²)"]
+    Ax["Ax"] --> solve["solve"] --> x["x"] --> loss["sum#40;x²#41;"]
     b["b"] --> solve
     loss -->|"grad"| dAx["∂loss/∂Ax"]
     loss -->|"grad"| db["∂loss/∂b"]
@@ -97,12 +97,12 @@ For **b = Ax**, the derivatives are straightforward:
 
 ## What You Can Differentiate
 
-| Function | w.r.t. Ax | w.r.t. b/x | w.r.t. Ai, Aj |
-|----------|----------|------------|---------------|
-| `solve` | Yes | Yes | No (integers) |
-| `dot` | Yes | Yes | No (integers) |
-| `solve_with_symbol` | Yes | Yes | No |
-| `refactor` | Yes | — | No |
+| Function            | w.r.t. Ax | w.r.t. b/x | w.r.t. Ai, Aj |
+| ------------------- | --------- | ---------- | ------------- |
+| `solve`             | Yes       | Yes        | No (integers) |
+| `dot`               | Yes       | Yes        | No (integers) |
+| `solve_with_symbol` | Yes       | Yes        | No            |
+| `refactor`          | Yes       | —          | No            |
 
 ## Practical Example: Inverse Problem
 
@@ -136,4 +136,4 @@ print(f"Final Ax: {Ax}")
 ```
 
 !!! warning "No gradients through indices"
-    You cannot differentiate with respect to `Ai` or `Aj`. These are integer arrays that define the sparsity pattern — they're not continuous and not differentiable.
+You cannot differentiate with respect to `Ai` or `Aj`. These are integer arrays that define the sparsity pattern — they're not continuous and not differentiable.

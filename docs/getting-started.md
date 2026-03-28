@@ -7,33 +7,31 @@ summary: Install klujax and solve your first sparse system
 
 ## Installation
 
-=== "pip"
+/// tab | uv
 
-    ```bash
-    pip install klujax
-    ```
+```bash
+uv add klujax
+```
 
-=== "uv"
+///
 
-    ```bash
-    uv add klujax
-    ```
+/// tab | pip
+
+```bash
+pip install klujax
+```
+
+///
 
 Pre-built wheels are available for Linux and Windows (Python 3.11+). If no wheel matches your platform, pip will build from source — see the [README](https://github.com/flaport/klujax#installing-from-source) for build dependencies.
 
 ## Your First Solve
 
-Imagine you have a system of equations:
+Imagine you have a system of equations **Ax = b** where A is a 5x5 matrix. Most entries in A are zero — it's sparse:
 
-```
-2x₁ + 3x₂         = 8
-3x₁      + 4x₃ + 6x₅ = 45
-    - x₂ - 3x₃ + 2x₄ = -3
-           x₃         = 3
-      4x₂ + 2x₃    + x₅ = 19
-```
-
-This is **Ax = b** where A is a 5×5 matrix. Most entries in A are zero — it's sparse.
+$$
+\begin{bmatrix} 2 & 3 & 0 & 0 & 0 \\ 3 & 0 & 4 & 0 & 6 \\ 0 & -1 & -3 & 2 & 0 \\ 0 & 0 & 1 & 0 & 0 \\ 0 & 4 & 2 & 0 & 1 \end{bmatrix} \begin{bmatrix} x_1 \\ x_2 \\ x_3 \\ x_4 \\ x_5 \end{bmatrix} = \begin{bmatrix} 8 \\ 45 \\ -3 \\ 3 \\ 19 \end{bmatrix}
+$$
 
 ### Step 1: Express A in COO Format
 
@@ -80,9 +78,9 @@ print(jnp.allclose(x, x_ref))  # True
 ```mermaid
 flowchart TD
     subgraph "klujax.solve (all-in-one)"
-        A1["1. Analyze\nStudy sparsity pattern\n(which entries are nonzero?)"]
-        A2["2. Factor\nCompute LU decomposition\n(break A into L × U)"]
-        A3["3. Solve\nForward/backward substitution\n(use L and U to find x)"]
+        A1["1. Analyze\nStudy sparsity pattern\n#40;which entries are nonzero?#41;"]
+        A2["2. Factor\nCompute LU decomposition\n#40;break A into L x U#41;"]
+        A3["3. Solve\nForward/backward substitution\n#40;use L and U to find x#41;"]
         A1 --> A2 --> A3
     end
     Input["Ai, Aj, Ax, b"] --> A1

@@ -16,17 +16,17 @@ Explicitly free the C++ memory behind a KLU handle. You only need these inside `
 
 ### free_symbolic
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `symbolic` | KLUHandleManager | Handle from [analyze](../api/analyze.md) |
-| `dependency` | Array or None | An array that must be computed **before** the handle is freed |
+| Parameter    | Type             | Description                                                   |
+| ------------ | ---------------- | ------------------------------------------------------------- |
+| `symbolic`   | KLUHandleManager | Handle from [analyze](../api/analyze.md)                      |
+| `dependency` | Array or None    | An array that must be computed **before** the handle is freed |
 
 ### free_numeric
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `numeric` | KLUHandleManager | Handle from [factor](../api/factor.md) or [refactor](../api/refactor.md) |
-| `dependency` | Array or None | An array that must be computed **before** the handle is freed |
+| Parameter    | Type             | Description                                                              |
+| ------------ | ---------------- | ------------------------------------------------------------------------ |
+| `numeric`    | KLUHandleManager | Handle from [factor](../api/factor.md) or [refactor](../api/refactor.md) |
+| `dependency` | Array or None    | An array that must be computed **before** the handle is freed            |
 
 ## Why dependency Matters
 
@@ -41,8 +41,8 @@ flowchart TD
     end
 
     subgraph "With dependency (CORRECT)"
-        A2["analyze"] --> S2["solve_with_symbol"] --> X2["x (result)"]
-        X2 --> F2["free_symbolic(sym, dependency=x)"]
+        A2["analyze"] --> S2["solve_with_symbol"] --> X2["x #40;result#41;"]
+        X2 --> F2["free_symbolic#40;sym, dependency=x#41;"]
     end
 ```
 
@@ -83,4 +83,4 @@ with klujax.analyze(Ai, Aj, n_col) as symbolic:
 ```
 
 !!! tip
-    The best practice is to create handles **outside** JIT. Then you never need `free_symbolic` or `free_numeric` at all. See [Memory Management](../advanced/memory-management.md).
+The best practice is to create handles **outside** JIT. Then you never need `free_symbolic` or `free_numeric` at all. See [Memory Management](../advanced/memory-management.md).

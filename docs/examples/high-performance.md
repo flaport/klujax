@@ -20,7 +20,7 @@ flowchart TD
 
     subgraph "Optimized: analyze once"
         direction LR
-        AN["Analyze (once)"] --> S1["Step 1\nfactor+solve"]
+        AN["Analyze #40;once#41;"] --> S1["Step 1\nfactor+solve"]
         AN --> S2["Step 2\nfactor+solve"]
         AN --> S3["Step 3\nfactor+solve"]
     end
@@ -67,10 +67,10 @@ for t in range(1000):
 The analyze step typically dominates for large matrices. By hoisting it out:
 
 | Matrix Size | solve (all-in-one) | solve_with_symbol | Speedup |
-|-------------|-------------------|-------------------|---------|
-| 100×100 | ~0.5ms | ~0.2ms | ~2.5× |
-| 1000×1000 | ~5ms | ~1ms | ~5× |
-| 10000×10000 | ~50ms | ~5ms | ~10× |
+| ----------- | ------------------ | ----------------- | ------- |
+| 100×100     | ~0.5ms             | ~0.2ms            | ~2.5×   |
+| 1000×1000   | ~5ms               | ~1ms              | ~5×     |
+| 10000×10000 | ~50ms              | ~5ms              | ~10×    |
 
 (Approximate — depends on sparsity and hardware.)
 
@@ -101,9 +101,9 @@ flowchart TD
         SYM --> FA["factor"] --> NUM["numeric"]
     end
     subgraph "Hot loop (10,000 iterations)"
-        NUM --> S1["solve_with_numeric(b₁)"]
-        NUM --> S2["solve_with_numeric(b₂)"]
-        NUM --> SN["solve_with_numeric(bₙ)"]
+        NUM --> S1["solve_with_numeric#40;b₁#41;"]
+        NUM --> S2["solve_with_numeric#40;b₂#41;"]
+        NUM --> SN["solve_with_numeric#40;bₙ#41;"]
     end
 
     style AN fill:#f59e0b,color:#fff,stroke:none
@@ -135,12 +135,12 @@ for t in range(1000):
 ```mermaid
 flowchart TD
     Q1{"Does the sparsity\npattern change?"}
-    Q1 -->|Yes| SOLVE["Use klujax.solve\n(no way around it)"]
+    Q1 -->|Yes| SOLVE["Use klujax.solve\n#40;no way around it#41;"]
     Q1 -->|No| Q2{"Do the matrix\nvalues change?"}
     Q2 -->|Yes| Q3{"Do values change\nevery step?"}
     Q3 -->|Yes| SWS["analyze once →\nsolve_with_symbol each step"]
     Q3 -->|"Occasionally"| RF["analyze once → factor once →\nrefactor when values change →\nsolve_with_numeric"]
-    Q2 -->|No| SWN["analyze once → factor once →\nsolve_with_numeric\n(fastest)"]
+    Q2 -->|No| SWN["analyze once → factor once →\nsolve_with_numeric\n#40;fastest#41;"]
 
     style SOLVE fill:#ef4444,color:#fff,stroke:none
     style SWS fill:#f59e0b,color:#fff,stroke:none

@@ -13,18 +13,18 @@ Re-compute the LU factorization with new matrix values, reusing both the symboli
 
 ## Parameters
 
-| Parameter | Type | Shape | Description |
-|-----------|------|-------|-------------|
-| `Ai` | int32 | `(n_nz,)` | Row indices |
-| `Aj` | int32 | `(n_nz,)` | Column indices |
-| `Ax` | float64 or complex128 | `(n_lhs?, n_nz)` | **New** matrix values |
-| `numeric` | KLUHandleManager | — | Existing handle from [factor](factor.md) or a previous `refactor` |
-| `symbolic` | KLUHandleManager | — | Handle from [analyze](analyze.md) |
+| Parameter  | Type                  | Shape            | Description                                                       |
+| ---------- | --------------------- | ---------------- | ----------------------------------------------------------------- |
+| `Ai`       | int32                 | `(n_nz,)`        | Row indices                                                       |
+| `Aj`       | int32                 | `(n_nz,)`        | Column indices                                                    |
+| `Ax`       | float64 or complex128 | `(n_lhs?, n_nz)` | **New** matrix values                                             |
+| `numeric`  | KLUHandleManager      | —                | Existing handle from [factor](factor.md) or a previous `refactor` |
+| `symbolic` | KLUHandleManager      | —                | Handle from [analyze](analyze.md)                                 |
 
 ## Returns
 
-| Type | Description |
-|------|-------------|
+| Type               | Description                                                          |
+| ------------------ | -------------------------------------------------------------------- |
 | `KLUHandleManager` | The same numeric handle, updated in-place with the new factorization |
 
 ## How It Fits In
@@ -32,11 +32,11 @@ Re-compute the LU factorization with new matrix values, reusing both the symboli
 ```mermaid
 flowchart TD
     AN["analyze"] --> SYM["symbolic"]
-    SYM --> FA["factor(Ax₀)"] --> NUM["numeric"]
-    NUM --> RF["refactor(Ax₁, numeric, symbolic)"]:::active
-    RF --> NUM2["numeric (updated)"]
-    NUM2 --> RF2["refactor(Ax₂, numeric, symbolic)"]:::active
-    RF2 --> NUM3["numeric (updated)"]
+    SYM --> FA["factor#40;Ax₀#41;"] --> NUM["numeric"]
+    NUM --> RF["refactor#40;Ax₁, numeric, symbolic#41;"]:::active
+    RF --> NUM2["numeric #40;updated#41;"]
+    NUM2 --> RF2["refactor#40;Ax₂, numeric, symbolic#41;"]:::active
+    RF2 --> NUM3["numeric #40;updated#41;"]
     NUM3 --> SWN["solve_with_numeric"]
 
     classDef active fill:#8b5cf6,color:#fff,stroke:none
@@ -66,20 +66,20 @@ for t in range(num_steps):
 
 ## factor vs. refactor
 
-| | factor | refactor |
-|---|--------|----------|
-| Needs existing numeric? | No | Yes |
-| Allocates new memory? | Yes | No (in-place) |
-| Speed | Moderate | Slightly faster |
-| Use case | First factorization | Subsequent updates |
+|                         | factor              | refactor           |
+| ----------------------- | ------------------- | ------------------ |
+| Needs existing numeric? | No                  | Yes                |
+| Allocates new memory?   | Yes                 | No (in-place)      |
+| Speed                   | Moderate            | Slightly faster    |
+| Use case                | First factorization | Subsequent updates |
 
 `refactor` is most useful in time-stepping simulations where the matrix values change at every step but the sparsity pattern stays the same.
 
 ## JAX Features
 
-| Feature | Supported |
-|---------|-----------|
-| `jax.jit` | Yes (via internal JIT wrapper) |
-| `jax.grad` | Yes (w.r.t. `Ax`) |
-| `jax.vmap` | Yes |
-| `jax.pmap` | Yes |
+| Feature    | Supported                      |
+| ---------- | ------------------------------ |
+| `jax.jit`  | Yes (via internal JIT wrapper) |
+| `jax.grad` | Yes (w.r.t. `Ax`)              |
+| `jax.vmap` | Yes                            |
+| `jax.pmap` | Yes                            |

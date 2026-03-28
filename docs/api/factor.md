@@ -13,17 +13,17 @@ Perform numeric LU factorization using a pre-computed symbolic analysis. This co
 
 ## Parameters
 
-| Parameter | Type | Shape | Description |
-|-----------|------|-------|-------------|
-| `Ai` | int32 | `(n_nz,)` | Row indices |
-| `Aj` | int32 | `(n_nz,)` | Column indices |
-| `Ax` | float64 or complex128 | `(n_lhs?, n_nz)` | Matrix values |
-| `symbolic` | KLUHandleManager | — | Handle from [analyze](analyze.md) |
+| Parameter  | Type                  | Shape            | Description                       |
+| ---------- | --------------------- | ---------------- | --------------------------------- |
+| `Ai`       | int32                 | `(n_nz,)`        | Row indices                       |
+| `Aj`       | int32                 | `(n_nz,)`        | Column indices                    |
+| `Ax`       | float64 or complex128 | `(n_lhs?, n_nz)` | Matrix values                     |
+| `symbolic` | KLUHandleManager      | —                | Handle from [analyze](analyze.md) |
 
 ## Returns
 
-| Type | Description |
-|------|-------------|
+| Type               | Description                                    |
+| ------------------ | ---------------------------------------------- |
 | `KLUHandleManager` | A handle wrapping the numeric LU factorization |
 
 ## How It Fits In
@@ -31,10 +31,10 @@ Perform numeric LU factorization using a pre-computed symbolic analysis. This co
 ```mermaid
 flowchart TD
     AN["analyze"] --> SYM["symbolic"]
-    SYM --> FA["factor(Ai, Aj, Ax, symbolic)"]:::active
+    SYM --> FA["factor#40;Ai, Aj, Ax, symbolic#41;"]:::active
     FA --> NUM["numeric handle"]
-    NUM --> SWN["solve_with_numeric(numeric, b, symbolic)"]
-    NUM --> RF["refactor(Ai, Aj, Ax_new, numeric, symbolic)"]
+    NUM --> SWN["solve_with_numeric#40;numeric, b, symbolic#41;"]
+    NUM --> RF["refactor#40;Ai, Aj, Ax_new, numeric, symbolic#41;"]
 
     classDef active fill:#6366f1,color:#fff,stroke:none
 ```
@@ -85,8 +85,8 @@ Same rules as [analyze](analyze.md#memory-management) — the handle cleans up a
 ```mermaid
 flowchart TD
     Q{"Same Ax,\ndifferent b?"}
-    Q -->|Yes| FA["factor → solve_with_numeric\n(factor once, solve many)"]
-    Q -->|No| SWS["solve_with_symbol\n(factor + solve each time)"]
+    Q -->|Yes| FA["factor → solve_with_numeric\n#40;factor once, solve many#41;"]
+    Q -->|No| SWS["solve_with_symbol\n#40;factor + solve each time#41;"]
 
     style FA fill:#6366f1,color:#fff,stroke:none
     style SWS fill:#10b981,color:#fff,stroke:none

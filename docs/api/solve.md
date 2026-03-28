@@ -13,17 +13,17 @@ Solve for **x** in the sparse linear system **Ax = b**. This is the main entry p
 
 ## Parameters
 
-| Parameter | Type | Shape | Description |
-|-----------|------|-------|-------------|
-| `Ai` | int32 | `(n_nz,)` | Row indices of nonzero entries |
-| `Aj` | int32 | `(n_nz,)` | Column indices of nonzero entries |
-| `Ax` | float64 or complex128 | `(n_lhs?, n_nz)` | Values of nonzero entries |
-| `b` | float64 or complex128 | `(n_lhs?, n_col, n_rhs?)` | Right-hand side vector(s) |
+| Parameter | Type                  | Shape                     | Description                       |
+| --------- | --------------------- | ------------------------- | --------------------------------- |
+| `Ai`      | int32                 | `(n_nz,)`                 | Row indices of nonzero entries    |
+| `Aj`      | int32                 | `(n_nz,)`                 | Column indices of nonzero entries |
+| `Ax`      | float64 or complex128 | `(n_lhs?, n_nz)`          | Values of nonzero entries         |
+| `b`       | float64 or complex128 | `(n_lhs?, n_col, n_rhs?)` | Right-hand side vector(s)         |
 
 ## Returns
 
-| Type | Shape | Description |
-|------|-------|-------------|
+| Type  | Shape             | Description                             |
+| ----- | ----------------- | --------------------------------------- |
 | Array | Same shape as `b` | The solution **x** such that **Ax = b** |
 
 ## How It Works
@@ -48,16 +48,16 @@ Every call to `solve` performs all three KLU stages. This is convenient but not 
 
 ## JAX Features
 
-| Feature | Supported |
-|---------|-----------|
-| `jax.jit` | Yes (auto-wrapped) |
-| `jax.grad` | Yes (w.r.t. `Ax` and `b`) |
-| `jax.jacfwd` | Yes |
-| `jax.jacrev` | Yes |
-| `jax.vmap` | Yes |
+| Feature      | Supported                 |
+| ------------ | ------------------------- |
+| `jax.jit`    | Yes (auto-wrapped)        |
+| `jax.grad`   | Yes (w.r.t. `Ax` and `b`) |
+| `jax.jacfwd` | Yes                       |
+| `jax.jacrev` | Yes                       |
+| `jax.vmap`   | Yes                       |
 
 !!! warning
-    Gradients with respect to `Ai` and `Aj` (the indices) are **not** supported — indices are integers and not differentiable.
+Gradients with respect to `Ai` and `Aj` (the indices) are **not** supported — indices are integers and not differentiable.
 
 ## Examples
 
@@ -109,14 +109,14 @@ x = klujax.solve(Ai, Aj, Ax, b)
 
 `solve` automatically expands underdefined dimensions:
 
-| Ax dims | b dims | Ax is treated as | b is treated as |
-|---------|--------|-----------------|-----------------|
-| 1D | 1D | `(n_nz,)` | `(n_col,)` |
-| 1D | 2D | `(n_nz,)` | `(n_col, n_rhs)` |
-| 1D | 3D | `(n_nz,)` | `(n_lhs, n_col, n_rhs)` |
-| 2D | 1D | `(n_lhs, n_nz)` | `(n_col,)` |
-| 2D | 2D | `(n_lhs, n_nz)` | `(n_lhs, n_col)` |
-| 2D | 3D | `(n_lhs, n_nz)` | `(n_lhs, n_col, n_rhs)` |
+| Ax dims | b dims | Ax is treated as | b is treated as         |
+| ------- | ------ | ---------------- | ----------------------- |
+| 1D      | 1D     | `(n_nz,)`        | `(n_col,)`              |
+| 1D      | 2D     | `(n_nz,)`        | `(n_col, n_rhs)`        |
+| 1D      | 3D     | `(n_nz,)`        | `(n_lhs, n_col, n_rhs)` |
+| 2D      | 1D     | `(n_lhs, n_nz)`  | `(n_col,)`              |
+| 2D      | 2D     | `(n_lhs, n_nz)`  | `(n_lhs, n_col)`        |
+| 2D      | 3D     | `(n_lhs, n_nz)`  | `(n_lhs, n_col, n_rhs)` |
 
 ## When to Use Something Else
 

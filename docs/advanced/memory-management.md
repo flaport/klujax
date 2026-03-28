@@ -11,11 +11,11 @@ When you use the split API (`analyze`, `factor`, `refactor`), klujax creates C++
 
 ```mermaid
 flowchart TD
-    AN["klujax.analyze(Ai, Aj, n_col)"] --> HM["KLUHandleManager\n(wraps C++ pointer)"]
+    AN["klujax.analyze#40;Ai, Aj, n_col#41;"] --> HM["KLUHandleManager\n#40;wraps C++ pointer#41;"]
     HM --> USE["Use in solve_with_symbol,\nfactor, etc."]
     USE --> FREE{"How is it freed?"}
-    FREE -->|Outside JIT| AUTO["Automatic\n(garbage collection)"]
-    FREE -->|Inside JIT| MANUAL["Manual\n(free_symbolic / free_numeric)"]
+    FREE -->|Outside JIT| AUTO["Automatic\n#40;garbage collection#41;"]
+    FREE -->|Inside JIT| MANUAL["Manual\n#40;free_symbolic / free_numeric#41;"]
 
     style AUTO fill:#10b981,color:#fff,stroke:none
     style MANUAL fill:#f59e0b,color:#fff,stroke:none
@@ -51,12 +51,12 @@ When `analyze` or `factor` is called inside a `jax.jit` function, the Python `KL
 ```mermaid
 flowchart TD
     subgraph "Tracing Time (Python)"
-        TR["analyze() creates\nKLUHandleManager tracer"]
+        TR["analyze#40;#41; creates\nKLUHandleManager tracer"]
         TR --> LOST["Python object is\nconverted to XLA value"]
     end
     subgraph "Runtime (XLA)"
         XLA["C++ memory allocated\nby XLA at runtime"]
-        XLA --> LEAK["⚠️ Never freed!\n(memory leak)"]
+        XLA --> LEAK["⚠️ Never freed!\n#40;memory leak#41;"]
     end
 
     style LEAK fill:#ef4444,color:#fff,stroke:none
@@ -124,11 +124,11 @@ for t in range(1000):
 
 The handle manager tracks:
 
-| Property | Description |
-|----------|-------------|
-| `handle` | uint64 pointer to C++ object |
+| Property | Description                                                  |
+| -------- | ------------------------------------------------------------ |
+| `handle` | uint64 pointer to C++ object                                 |
 | `_owner` | Whether this manager owns the pointer (prevents double-free) |
-| `_freed` | Whether the resource has already been freed |
+| `_freed` | Whether the resource has already been freed                  |
 
 ### Safety Features
 

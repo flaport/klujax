@@ -13,24 +13,24 @@ Compute the sparse matrix-vector product **b = Ax**, where **A** is a sparse mat
 
 ## Parameters
 
-| Parameter | Type | Shape | Description |
-|-----------|------|-------|-------------|
-| `Ai` | int32 | `(n_nz,)` | Row indices of nonzero entries |
-| `Aj` | int32 | `(n_nz,)` | Column indices of nonzero entries |
-| `Ax` | float64 or complex128 | `(n_lhs?, n_nz)` | Values of nonzero entries |
-| `x` | float64 or complex128 | `(n_lhs?, n_col, n_rhs?)` | Input vector(s) |
+| Parameter | Type                  | Shape                     | Description                       |
+| --------- | --------------------- | ------------------------- | --------------------------------- |
+| `Ai`      | int32                 | `(n_nz,)`                 | Row indices of nonzero entries    |
+| `Aj`      | int32                 | `(n_nz,)`                 | Column indices of nonzero entries |
+| `Ax`      | float64 or complex128 | `(n_lhs?, n_nz)`          | Values of nonzero entries         |
+| `x`       | float64 or complex128 | `(n_lhs?, n_col, n_rhs?)` | Input vector(s)                   |
 
 ## Returns
 
-| Type | Shape | Description |
-|------|-------|-------------|
+| Type  | Shape             | Description            |
+| ----- | ----------------- | ---------------------- |
 | Array | Same shape as `x` | The product **b = Ax** |
 
 ## How It Works
 
 ```mermaid
 flowchart LR
-    A["Sparse A\n(Ai, Aj, Ax)"] --> mul["dot\nb = A × x"]
+    A["Sparse A\n#40;Ai, Aj, Ax#41;"] --> mul["dot\nb = A x x"]
     X["Vector x"] --> mul
     mul --> B["Result b"]
     style mul fill:#6366f1,color:#fff,stroke:none
@@ -40,13 +40,13 @@ For each nonzero entry at position (i, j) with value v, `dot` adds `v * x[j]` to
 
 ## JAX Features
 
-| Feature | Supported |
-|---------|-----------|
-| `jax.jit` | Yes (auto-wrapped) |
-| `jax.grad` | Yes (w.r.t. `Ax` and `x`) |
-| `jax.jacfwd` | Yes |
-| `jax.jacrev` | Yes |
-| `jax.vmap` | Yes |
+| Feature      | Supported                 |
+| ------------ | ------------------------- |
+| `jax.jit`    | Yes (auto-wrapped)        |
+| `jax.grad`   | Yes (w.r.t. `Ax` and `x`) |
+| `jax.jacfwd` | Yes                       |
+| `jax.jacrev` | Yes                       |
+| `jax.vmap`   | Yes                       |
 
 ## Example
 
@@ -71,7 +71,7 @@ b = klujax.dot(Ai, Aj, Ax, x)
 ```mermaid
 flowchart LR
     X1["x"] -->|"dot(Ai, Aj, Ax, x)"| B["b = Ax"]
-    B -->|"solve(Ai, Aj, Ax, b)"| X2["x = A⁻¹b"]
+    B -->|"solve(Ai, Aj, Ax, b)"| X2["x = A^-1b"]
 
     style X1 fill:#10b981,color:#fff,stroke:none
     style B fill:#f59e0b,color:#fff,stroke:none

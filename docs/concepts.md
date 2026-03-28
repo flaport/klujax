@@ -15,11 +15,11 @@ A sparse matrix is a matrix where most entries are zero. Instead of storing ever
 
 klujax uses **COO format** to represent sparse matrices. COO stores three arrays:
 
-| Array | Type | Shape | Description |
-|-------|------|-------|-------------|
-| `Ai` | int32 | `(n_nz,)` | Row index of each nonzero entry |
-| `Aj` | int32 | `(n_nz,)` | Column index of each nonzero entry |
-| `Ax` | float64 or complex128 | `(n_nz,)` or `(n_lhs, n_nz)` | Value of each nonzero entry |
+| Array | Type                  | Shape                        | Description                        |
+| ----- | --------------------- | ---------------------------- | ---------------------------------- |
+| `Ai`  | int32                 | `(n_nz,)`                    | Row index of each nonzero entry    |
+| `Aj`  | int32                 | `(n_nz,)`                    | Column index of each nonzero entry |
+| `Ax`  | float64 or complex128 | `(n_nz,)` or `(n_lhs, n_nz)` | Value of each nonzero entry        |
 
 Here, `n_nz` is the number of nonzero entries.
 
@@ -41,7 +41,7 @@ Ax = [2, 3, 4, 5, 6]  # values
 
 ```mermaid
 flowchart LR
-    subgraph "Dense Matrix (3×3 = 9 entries)"
+    subgraph "Dense Matrix (3x3 = 9 entries)"
         D["2  3  0\n0  0  4\n5  0  6"]
     end
     subgraph "COO Format (5 entries)"
@@ -66,7 +66,7 @@ Ai, Aj, Ax = klujax.coalesce(Ai, Aj, Ax)
 ```
 
 !!! warning
-    `coalesce` cannot be used inside `jax.jit`. Call it before entering any JIT-compiled function.
+`coalesce` cannot be used inside `jax.jit`. Call it before entering any JIT-compiled function.
 
 ## The KLU Algorithm
 
@@ -75,13 +75,13 @@ KLU is a solver for sparse linear systems **Ax = b**. It works in three stages:
 ```mermaid
 flowchart TD
     subgraph "Stage 1: Analyze (Symbolic)"
-        AN["Study the sparsity pattern\n(positions of nonzeros)\nFind optimal row/column orderings\nIdentify block triangular structure"]
+        AN["Study the sparsity pattern\n#40;positions of nonzeros#41;\nFind optimal row/column orderings\nIdentify block triangular structure"]
     end
     subgraph "Stage 2: Factor (Numeric)"
-        FA["Compute LU decomposition\nA = L × U\nwhere L is lower triangular\nand U is upper triangular"]
+        FA["Compute LU decomposition\nA = L x U\nwhere L is lower triangular\nand U is upper triangular"]
     end
     subgraph "Stage 3: Solve"
-        SO["Forward substitution: Ly = b\nBackward substitution: Ux = y\nResult: x = A⁻¹b"]
+        SO["Forward substitution: Ly = b\nBackward substitution: Ux = y\nResult: x = A^-1b"]
     end
     AN -->|"symbolic handle"| FA
     FA -->|"numeric handle"| SO
@@ -96,11 +96,11 @@ flowchart TD
 
 Each stage depends on different inputs and has different computational cost:
 
-| Stage | Depends On | Cost | When to Rerun |
-|-------|-----------|------|---------------|
+| Stage       | Depends On                | Cost      | When to Rerun                 |
+| ----------- | ------------------------- | --------- | ----------------------------- |
 | **Analyze** | Sparsity pattern (Ai, Aj) | Expensive | Only when the pattern changes |
-| **Factor** | Matrix values (Ax) | Moderate | When Ax changes |
-| **Solve** | Right-hand side (b) | Cheap | Every time b changes |
+| **Factor**  | Matrix values (Ax)        | Moderate  | When Ax changes               |
+| **Solve**   | Right-hand side (b)       | Cheap     | Every time b changes          |
 
 This separation is the key to high performance. If your sparsity pattern stays the same across many solves (common in simulations), you analyze once and reuse the result thousands of times.
 
@@ -110,23 +110,23 @@ klujax supports flexible shapes so you can solve many systems at once without lo
 
 ### Dimension Names
 
-| Name | Meaning |
-|------|---------|
-| `n_nz` | Number of nonzero entries in A |
+| Name    | Meaning                                          |
+| ------- | ------------------------------------------------ |
+| `n_nz`  | Number of nonzero entries in A                   |
 | `n_col` | Number of rows/columns in A (A is always square) |
 | `n_lhs` | Batch dimension — number of different A matrices |
-| `n_rhs` | Number of right-hand sides per system |
+| `n_rhs` | Number of right-hand sides per system            |
 
 ### Shape Combinations
 
 klujax automatically interprets your input shapes:
 
-| Ax shape | b shape | Interpretation |
-|----------|---------|---------------|
-| `(n_nz,)` | `(n_col,)` | One system, one right-hand side |
-| `(n_nz,)` | `(n_col, n_rhs)` | One system, multiple right-hand sides |
-| `(n_lhs, n_nz)` | `(n_col,)` | Multiple systems, same right-hand side |
-| `(n_lhs, n_nz)` | `(n_lhs, n_col)` | Multiple systems, one right-hand side each |
+| Ax shape        | b shape                 | Interpretation                              |
+| --------------- | ----------------------- | ------------------------------------------- |
+| `(n_nz,)`       | `(n_col,)`              | One system, one right-hand side             |
+| `(n_nz,)`       | `(n_col, n_rhs)`        | One system, multiple right-hand sides       |
+| `(n_lhs, n_nz)` | `(n_col,)`              | Multiple systems, same right-hand side      |
+| `(n_lhs, n_nz)` | `(n_lhs, n_col)`        | Multiple systems, one right-hand side each  |
 | `(n_lhs, n_nz)` | `(n_lhs, n_col, n_rhs)` | Multiple systems, multiple right-hand sides |
 
 The `n_lhs` batch dimension is shared — if Ax has 10 batches, b must also have 10 (or just 1, which broadcasts).
@@ -144,14 +144,14 @@ x_4d = jax.vmap(klujax.solve, in_axes=(None, None, 0, 0))(Ai, Aj, Ax_4d, b_4d)
 
 klujax only supports double precision:
 
-| Input Type | Auto-cast To |
-|-----------|-------------|
-| `float32` | `float64` |
-| `float64` | `float64` (no cast) |
-| `complex64` | `complex128` |
+| Input Type   | Auto-cast To           |
+| ------------ | ---------------------- |
+| `float32`    | `float64`              |
+| `float64`    | `float64` (no cast)    |
+| `complex64`  | `complex128`           |
 | `complex128` | `complex128` (no cast) |
 
 If either `Ax` or `b` is complex, the entire solve uses complex arithmetic.
 
 !!! note
-    klujax automatically enables `jax_enable_x64` when imported. You don't need to configure this yourself.
+klujax automatically enables `jax_enable_x64` when imported. You don't need to configure this yourself.

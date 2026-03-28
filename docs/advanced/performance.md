@@ -13,33 +13,33 @@ Every sparse solve has three stages with very different costs:
 
 ```mermaid
 flowchart LR
-    A["Analyze\n(pattern)"]:::expensive --> F["Factor\n(LU decomp)"]:::moderate --> S["Solve\n(substitution)"]:::cheap
+    A["Analyze\n#40;pattern#41;"]:::expensive --> F["Factor\n#40;LU decomp#41;"]:::moderate --> S["Solve\n#40;substitution#41;"]:::cheap
 
     classDef expensive fill:#ef4444,color:#fff,stroke:none
     classDef moderate fill:#f59e0b,color:#fff,stroke:none
     classDef cheap fill:#10b981,color:#fff,stroke:none
 ```
 
-| Stage | What It Does | Cost | Depends On |
-|-------|-------------|------|-----------|
-| **Analyze** | Find optimal orderings from sparsity pattern | Expensive | Ai, Aj |
-| **Factor** | LU decomposition (A = LU) | Moderate | Ax (values) |
-| **Solve** | Forward/backward substitution | Cheap | b (right-hand side) |
+| Stage       | What It Does                                 | Cost      | Depends On          |
+| ----------- | -------------------------------------------- | --------- | ------------------- |
+| **Analyze** | Find optimal orderings from sparsity pattern | Expensive | Ai, Aj              |
+| **Factor**  | LU decomposition (A = LU)                    | Moderate  | Ax (values)         |
+| **Solve**   | Forward/backward substitution                | Cheap     | b (right-hand side) |
 
 ## Decision Tree
 
 ```mermaid
 flowchart TD
     START["How many solves?"]
-    START -->|"Just one"| ONE["Use klujax.solve\n(simplest)"]
+    START -->|"Just one"| ONE["Use klujax.solve\n#40;simplest#41;"]
     START -->|"Many"| MANY["Does the sparsity\npattern change?"]
 
-    MANY -->|"Yes, every time"| SOLVE["Use klujax.solve\n(no shortcut possible)"]
+    MANY -->|"Yes, every time"| SOLVE["Use klujax.solve\n#40;no shortcut possible#41;"]
     MANY -->|"No, pattern is fixed"| PATTERN["Do matrix values\nchange?"]
 
     PATTERN -->|"Yes, every solve"| SWS["analyze once →\nsolve_with_symbol\neach step"]
     PATTERN -->|"Occasionally"| RF["analyze once →\nfactor once →\nrefactor when needed →\nsolve_with_numeric"]
-    PATTERN -->|"No, matrix is fixed"| SWN["analyze once →\nfactor once →\nsolve_with_numeric\n(fastest)"]
+    PATTERN -->|"No, matrix is fixed"| SWN["analyze once →\nfactor once →\nsolve_with_numeric\n#40;fastest#41;"]
 
     style ONE fill:#94a3b8,color:#fff,stroke:none
     style SOLVE fill:#ef4444,color:#fff,stroke:none

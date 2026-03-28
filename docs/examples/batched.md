@@ -33,9 +33,9 @@ x = klujax.solve(Ai, Aj, Ax, b)
 
 ```mermaid
 flowchart LR
-    A["A (one matrix)"] --> S["solve"]
-    B["b₁, b₂\n(2 right-hand sides)"] --> S
-    S --> X["x₁, x₂\n(2 solutions)"]
+    A["A #40;one matrix#41;"] --> S["solve"]
+    B["b₁, b₂\n#40;2 right-hand sides#41;"] --> S
+    S --> X["x₁, x₂\n#40;2 solutions#41;"]
     style S fill:#6366f1,color:#fff,stroke:none
 ```
 
@@ -66,9 +66,9 @@ x = klujax.solve(Ai, Aj, Ax, b)
 
 ```mermaid
 flowchart LR
-    A1["A₁, A₂, A₃\n(3 matrices)"] --> S["solve"]
-    B1["b₁, b₂, b₃\n(3 right-hand sides)"] --> S
-    S --> X1["x₁, x₂, x₃\n(3 solutions)"]
+    A1["A₁, A₂, A₃\n#40;3 matrices#41;"] --> S["solve"]
+    B1["b₁, b₂, b₃\n#40;3 right-hand sides#41;"] --> S
+    S --> X1["x₁, x₂, x₃\n#40;3 solutions#41;"]
     style S fill:#6366f1,color:#fff,stroke:none
 ```
 
@@ -117,7 +117,7 @@ x = jax.vmap(klujax.solve, in_axes=(None, None, 0, 0))(Ai, Aj, Ax_batch, b_batch
 ```
 
 !!! note
-    `Ai` and `Aj` are **never** batched — all systems share the same sparsity pattern. Always use `in_axes=None` for the index arrays.
+`Ai` and `Aj` are **never** batched — all systems share the same sparsity pattern. Always use `in_axes=None` for the index arrays.
 
 ## Complete Example: Parameter Sweep
 

@@ -25,21 +25,21 @@ The split API functions (`solve_with_symbol`, `solve_with_numeric`, `factor`, `r
 ```mermaid
 flowchart TD
     subgraph "Python Layer"
-        PY["klujax.solve(Ai, Aj, Ax, b)"]
-        PY --> VAL["validate_args\n(shape checking, broadcasting)"]
-        VAL --> BIND["primitive.bind()\n(register with JAX)"]
+        PY["klujax.solve#40;Ai, Aj, Ax, b#41;"]
+        PY --> VAL["validate_args\n#40;shape checking, broadcasting#41;"]
+        VAL --> BIND["primitive.bind#40;#41;\n#40;register with JAX#41;"]
     end
 
     subgraph "JAX Dispatch"
-        BIND --> IMPL["Implementation\n(calls C++ via FFI)"]
-        BIND --> ABSTRACT["Abstract eval\n(compute output shape/dtype)"]
-        BIND --> JVP["JVP rule\n(forward differentiation)"]
-        BIND --> TRANSPOSE["Transpose rule\n(reverse differentiation)"]
-        BIND --> BATCH["Batching rule\n(vmap)"]
+        BIND --> IMPL["Implementation\n#40;calls C++ via FFI#41;"]
+        BIND --> ABSTRACT["Abstract eval\n#40;compute output shape/dtype#41;"]
+        BIND --> JVP["JVP rule\n#40;forward differentiation#41;"]
+        BIND --> TRANSPOSE["Transpose rule\n#40;reverse differentiation#41;"]
+        BIND --> BATCH["Batching rule\n#40;vmap#41;"]
     end
 
     subgraph "C++ Layer (via XLA FFI)"
-        IMPL --> CPP["klujax_cpp\n(SuiteSparse KLU)"]
+        IMPL --> CPP["klujax_cpp\n#40;SuiteSparse KLU#41;"]
     end
 
     style PY fill:#6366f1,color:#fff,stroke:none
@@ -53,11 +53,13 @@ flowchart TD
 klujax registers JVP (Jacobian-Vector Product) rules for `solve` and `dot`:
 
 **For solve** (x = A⁻¹b):
+
 ```
 dx = A⁻¹(db - dA @ x)
 ```
 
 **For dot** (b = A @ x):
+
 ```
 db = dA @ x + A @ dx
 ```
@@ -94,13 +96,13 @@ J = jax.jacrev(lambda bb: klujax.solve(Ai, Aj, Ax, bb))(b)
 
 ### What's Differentiable?
 
-| Parameter | Differentiable? | Why |
-|-----------|----------------|-----|
-| `Ax` | Yes | Continuous matrix values |
-| `b` / `x` | Yes | Continuous vectors |
-| `Ai`, `Aj` | No | Integer indices — not continuous |
-| `symbolic` | No | Opaque C++ pointer |
-| `numeric` | No | Opaque C++ pointer |
+| Parameter  | Differentiable? | Why                              |
+| ---------- | --------------- | -------------------------------- |
+| `Ax`       | Yes             | Continuous matrix values         |
+| `b` / `x`  | Yes             | Continuous vectors               |
+| `Ai`, `Aj` | No              | Integer indices — not continuous |
+| `symbolic` | No              | Opaque C++ pointer               |
+| `numeric`  | No              | Opaque C++ pointer               |
 
 ## Vectorized Batching (vmap)
 
@@ -108,13 +110,13 @@ klujax registers batching rules so `jax.vmap` works naturally.
 
 ### What Can Be Batched
 
-| Parameter | Batchable? | Notes |
-|-----------|-----------|-------|
-| `Ax` | Yes | Different matrix values per batch |
-| `b` / `x` | Yes | Different vectors per batch |
-| `Ai`, `Aj` | No | Sparsity pattern is shared |
-| `numeric` | Yes | Different factorizations per batch |
-| `symbolic` | No | Analysis result is shared |
+| Parameter  | Batchable? | Notes                              |
+| ---------- | ---------- | ---------------------------------- |
+| `Ax`       | Yes        | Different matrix values per batch  |
+| `b` / `x`  | Yes        | Different vectors per batch        |
+| `Ai`, `Aj` | No         | Sparsity pattern is shared         |
+| `numeric`  | Yes        | Different factorizations per batch |
+| `symbolic` | No         | Analysis result is shared          |
 
 ### Batching Strategies
 
@@ -151,17 +153,17 @@ x = jax.vmap(klujax.solve, in_axes=(None, None, 0, None))(Ai, Aj, Ax_batch, b)
 
 Under the hood, klujax defines separate JAX primitives for float64 and complex128:
 
-| Operation | float64 | complex128 |
-|-----------|---------|------------|
-| solve | `solve_f64` | `solve_c128` |
-| dot | `dot_f64` | `dot_c128` |
-| solve_with_symbol | `solve_with_symbol_f64` | `solve_with_symbol_c128` |
-| factor | `factor_f64` | `factor_c128` |
-| refactor | `refactor_f64` | `refactor_c128` |
+| Operation          | float64                  | complex128                |
+| ------------------ | ------------------------ | ------------------------- |
+| solve              | `solve_f64`              | `solve_c128`              |
+| dot                | `dot_f64`                | `dot_c128`                |
+| solve_with_symbol  | `solve_with_symbol_f64`  | `solve_with_symbol_c128`  |
+| factor             | `factor_f64`             | `factor_c128`             |
+| refactor           | `refactor_f64`           | `refactor_c128`           |
 | solve_with_numeric | `solve_with_numeric_f64` | `solve_with_numeric_c128` |
-| analyze | `analyze_p` | — |
-| free_symbolic | `free_symbolic_p` | — |
-| free_numeric | `free_numeric_p` | — |
+| analyze            | `analyze_p`              | —                         |
+| free_symbolic      | `free_symbolic_p`        | —                         |
+| free_numeric       | `free_numeric_p`         | —                         |
 
 The Python API automatically dispatches to the correct primitive based on input dtypes.
 

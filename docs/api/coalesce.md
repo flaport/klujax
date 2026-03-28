@@ -13,16 +13,16 @@ Sum duplicate entries in a COO sparse matrix. If multiple entries share the same
 
 ## Parameters
 
-| Parameter | Type | Shape | Description |
-|-----------|------|-------|-------------|
-| `Ai` | int32 | `(n_nz,)` | Row indices (may contain duplicates) |
-| `Aj` | int32 | `(n_nz,)` | Column indices (may contain duplicates) |
-| `Ax` | float64 or complex128 | `(n_nz,)` or `(n_lhs, n_nz)` | Values |
+| Parameter | Type                  | Shape                        | Description                             |
+| --------- | --------------------- | ---------------------------- | --------------------------------------- |
+| `Ai`      | int32                 | `(n_nz,)`                    | Row indices (may contain duplicates)    |
+| `Aj`      | int32                 | `(n_nz,)`                    | Column indices (may contain duplicates) |
+| `Ax`      | float64 or complex128 | `(n_nz,)` or `(n_lhs, n_nz)` | Values                                  |
 
 ## Returns
 
-| Type | Description |
-|------|-------------|
+| Type           | Description                                                                   |
+| -------------- | ----------------------------------------------------------------------------- |
 | `(Ai, Aj, Ax)` | Deduplicated COO arrays. `n_nz` is reduced to the number of unique positions. |
 
 ## Why You Need This
@@ -32,10 +32,10 @@ klujax requires coalesced input — each (row, column) pair must appear at most 
 ```mermaid
 flowchart LR
     subgraph Before
-        B["(0,1): 3.0\n(0,1): 1.0\n(1,2): 4.0"]
+        B["#40;0,1#41;: 3.0\n#40;0,1#41;: 1.0\n#40;1,2#41;: 4.0"]
     end
     subgraph After
-        A["(0,1): 4.0\n(1,2): 4.0"]
+        A["#40;0,1#41;: 4.0\n#40;1,2#41;: 4.0"]
     end
     Before -->|coalesce| After
 ```
@@ -58,7 +58,7 @@ Ai, Aj, Ax = klujax.coalesce(Ai, Aj, Ax)
 ```
 
 !!! warning "Not JIT-compatible"
-    `coalesce` uses `jax.ensure_compile_time_eval()` internally and **cannot** be used inside `jax.jit`. Always call it before entering any JIT-compiled function.
+`coalesce` uses `jax.ensure_compile_time_eval()` internally and **cannot** be used inside `jax.jit`. Always call it before entering any JIT-compiled function.
 
 ## When Do Duplicates Appear?
 

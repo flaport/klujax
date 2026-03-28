@@ -23,18 +23,18 @@ The Jacobian factorization (step 2) is expensive. In a "modified Newton" approac
 ```mermaid
 flowchart TD
     subgraph "Once per Newton cycle"
-        J["Compute Jacobian J"] --> FA["factor(J)"]
+        J["Compute Jacobian J"] --> FA["factor#40;J#41;"]
         FA --> NUM["numeric handle"]
     end
     subgraph "Inner iterations (reuse factorization)"
-        NUM --> S1["solve_with_numeric(δx₁)"]
+        NUM --> S1["solve_with_numeric#40;δx₁#41;"]
         S1 --> U1["x ← x + δx₁"]
-        U1 --> R1["Compute f(x)"]
-        R1 --> S2["solve_with_numeric(δx₂)"]
+        U1 --> R1["Compute f#40;x#41;"]
+        R1 --> S2["solve_with_numeric#40;δx₂#41;"]
         S2 --> U2["x ← x + δx₂"]
         U2 --> CHECK{"Converged?"}
-        CHECK -->|No| R2["Compute f(x)"]
-        R2 --> S3["solve_with_numeric(δx₃)"]
+        CHECK -->|No| R2["Compute f#40;x#41;"]
+        R2 --> S3["solve_with_numeric#40;δx₃#41;"]
         CHECK -->|Yes| DONE["Done"]
     end
 

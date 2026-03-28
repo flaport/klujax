@@ -13,16 +13,16 @@ Solve **Ax = b** using a pre-computed numeric factorization. This is the fastest
 
 ## Parameters
 
-| Parameter | Type | Shape | Description |
-|-----------|------|-------|-------------|
-| `numeric` | KLUHandleManager | — | Handle from [factor](factor.md) or [refactor](refactor.md) |
-| `b` | float64 or complex128 | `(n_lhs?, n_col, n_rhs?)` | Right-hand side |
-| `symbolic` | KLUHandleManager | — | Handle from [analyze](analyze.md) |
+| Parameter  | Type                  | Shape                     | Description                                                |
+| ---------- | --------------------- | ------------------------- | ---------------------------------------------------------- |
+| `numeric`  | KLUHandleManager      | —                         | Handle from [factor](factor.md) or [refactor](refactor.md) |
+| `b`        | float64 or complex128 | `(n_lhs?, n_col, n_rhs?)` | Right-hand side                                            |
+| `symbolic` | KLUHandleManager      | —                         | Handle from [analyze](analyze.md)                          |
 
 ## Returns
 
-| Type | Shape | Description |
-|------|-------|-------------|
+| Type  | Shape             | Description        |
+| ----- | ----------------- | ------------------ |
 | Array | Same shape as `b` | The solution **x** |
 
 ## How It Fits In
@@ -31,10 +31,10 @@ Solve **Ax = b** using a pre-computed numeric factorization. This is the fastest
 flowchart LR
     subgraph "Setup (once)"
         AN["analyze"] --> SYM["symbolic"]
-        SYM --> FA["factor(Ax)"] --> NUM["numeric"]
+        SYM --> FA["factor#40;Ax#41;"] --> NUM["numeric"]
     end
     subgraph "Hot loop (many times)"
-        NUM --> SWN["solve_with_numeric\n(numeric, b_t, symbolic)"]:::active
+        NUM --> SWN["solve_with_numeric\n#40;numeric, b_t, symbolic#41;"]:::active
         B["b_t"] --> SWN
         SWN --> X["x_t"]
     end
@@ -118,7 +118,7 @@ x_batch = klujax.solve_with_numeric(numeric, b_batch, symbolic)
 
 ## JAX Features
 
-| Feature | Supported |
-|---------|-----------|
-| `jax.jit` | Yes |
-| `jax.vmap` | Yes |
+| Feature    | Supported |
+| ---------- | --------- |
+| `jax.jit`  | Yes       |
+| `jax.vmap` | Yes       |

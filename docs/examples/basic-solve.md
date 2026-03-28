@@ -35,12 +35,12 @@ b = jnp.array([8.0, 45.0, -3.0, 3.0, 19.0])
 ```
 
 !!! tip "Quick conversion from dense"
-    If you already have a dense matrix, convert it like this:
-    ```python
+If you already have a dense matrix, convert it like this:
+`python
     A_dense = jnp.array([[2, 3, 0, 0, 0], ...])
     Ai, Aj = jnp.where(jnp.abs(A_dense) > 0)
     Ax = A_dense[Ai, Aj]
-    ```
+    `
 
 ## Step 2: Solve
 
@@ -67,7 +67,7 @@ print(jnp.allclose(x, x_ref))  # True
 ```mermaid
 flowchart TD
     Dense["Dense matrix A"] --> COO["Extract nonzeros\nAi, Aj, Ax"]
-    COO --> Solve["klujax.solve(Ai, Aj, Ax, b)"]
+    COO --> Solve["klujax.solve#40;Ai, Aj, Ax, b#41;"]
     RHS["Right-hand side b"] --> Solve
     Solve --> Result["Solution x = [1, 2, 3, 4, 5]"]
     Result --> Verify["Verify: A @ x ≈ b ✓"]
