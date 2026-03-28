@@ -12,9 +12,12 @@ __all__ = [
     "free_numeric",
     "free_symbolic",
     "refactor",
+    "refactor_and_solve",
     "solve",
     "solve_with_numeric",
     "solve_with_symbol",
+    "tsolve_with_numeric",
+    "tsolve_with_symbol",
 ]
 
 # Imports =============================================================================
@@ -391,6 +394,46 @@ def solve_with_symbol(
 
 
 @jax.jit
+def _tsolve_with_symbol_jit(Ai: Array, Aj: Array, Ax: Array, b: Array, sym_h: Array) -> Array:
+    Ai, Aj, Ax, b, out_shape = validate_numeric_solve(Ai, Aj, Ax, b)
+
+    is_complex = any(x.dtype in COMPLEX_DTYPES for x in (Ax, b))
+    prim = tsolve_with_symbol_c128 if is_complex else tsolve_with_symbol_f64
+
+    x = prim.bind(
+        Ai, Aj,
+        Ax.astype(jnp.complex128 if is_complex else jnp.float64),
+        b.astype(jnp.complex128 if is_complex else jnp.float64),
+        sym_h.astype(jnp.uint64)
+    )
+
+    return x.reshape(*out_shape)
+
+def tsolve_with_symbol(Ai: Array, Aj: Array, Ax: Array, b: Array, symbolic: Union[KLUHandleManager, Array]) -> Array:
+    """Solve A^T x=b (transpose solve) using a pre-computed symbolic analysis.
+
+    Factors A numerically, then solves the transposed system using klu_tsolve.
+    The symbolic handle describes the sparsity pattern of A (not A^T), and is
+    reused as-is — KLU's triangular transpose solver handles the direction internally.
+
+    For complex matrices, this solves A^T x = b (plain transpose, not conjugate).
+    Use the conjugate transpose if you need A^H x = b.
+
+    Args:
+        Ai: [n_nz; int32]: the row indices of the sparse matrix A
+        Aj: [n_nz; int32]: the column indices of the sparse matrix A
+        Ax: [n_lhs? x n_nz; float64|complex128]: the values of the sparse matrix A
+        b:  [n_lhs? x n_col x n_rhs?; float64|complex128]: the target vector
+        symbolic: [KLUHandleManager|Array]: the symbolic analysis object or handle
+
+    Returns:
+        x: the result (x≈(A^T)^-1 b)
+
+    """
+    handle = getattr(symbolic, "handle", symbolic)
+    return _tsolve_with_symbol_jit(Ai, Aj, Ax, b, handle)
+
+@jax.jit
 def _factor_jit(Ai: Array, Aj: Array, Ax: Array, sym_h: Array) -> Array:
     dummy_b = jnp.zeros((1,), dtype=Ax.dtype)
     Ai, Aj, Ax, _, _ = validate_args(Ai, Aj, Ax, dummy_b)
@@ -495,6 +538,92 @@ def solve_with_numeric(
         free_numeric(numeric, dependency=result)
     return result
 
+@jax.jit
+def _tsolve_with_numeric_jit(num_h: Array, b: Array, sym_h: Array) -> Array:
+    prim = tsolve_with_numeric_c128 if b.dtype in COMPLEX_DTYPES else tsolve_with_numeric_f64
+    return prim.bind(sym_h.astype(jnp.uint64), num_h.astype(jnp.uint64), b)
+
+def tsolve_with_numeric(numeric: Union[KLUHandleManager, Array], b: Array, symbolic: Union[KLUHandleManager, Array]) -> Array:
+    """Solve A^T x=b (transpose solve) using a pre-computed numeric factorization.
+
+    Uses klu_tsolve internally. The numeric factorization must have been computed
+    for A (not A^T); KLU handles the transposition during the triangular solve.
+
+    For complex matrices, this solves A^T x = b (plain transpose, not conjugate).
+
+    Args:
+        numeric: [KLUHandleManager|Array]: the numeric factorization object or handle
+        b:  [n_lhs? x n_col x n_rhs?; float64|complex128]: the target vector
+        symbolic: [KLUHandleManager|Array]: the symbolic analysis object or handle
+
+    Returns:
+        x: the result (x≈(A^T)^-1 b)
+
+    """
+    num_h = getattr(numeric, "handle", numeric)
+    sym_h = getattr(symbolic, "handle", symbolic)
+    result = _tsolve_with_numeric_jit(num_h, b, sym_h)
+
+    if isinstance(num_h, jax.core.Tracer) and isinstance(numeric, KLUHandleManager):
+        free_numeric(numeric, dependency=result)
+    return result
+
+@jax.jit
+def _refactor_and_solve_jit(Ai: Array, Aj: Array, Ax: Array, b: Array, sym_h: Array, num_h: Array) -> Tuple[Array, Array]:
+    # Use validate_numeric_solve to standardize shapes and capture the expected out_shape
+    Ai, Aj, Ax, b, out_shape = validate_numeric_solve(Ai, Aj, Ax, b)
+    
+    is_complex = any(x.dtype in COMPLEX_DTYPES for x in (Ax, b))
+    prim = refactor_and_solve_c128 if is_complex else refactor_and_solve_f64
+    
+    x, out_num = prim.bind(
+        Ai, Aj,
+        Ax.astype(jnp.complex128 if is_complex else jnp.float64),
+        b.astype(jnp.complex128 if is_complex else jnp.float64),
+        sym_h.astype(jnp.uint64),
+        num_h.astype(jnp.uint64),
+    )
+    
+    # Reshape x back to the original dimensions of b
+    return x.reshape(*out_shape), out_num
+
+def refactor_and_solve(
+    Ai: Array,
+    Aj: Array,
+    Ax: Array,
+    b: Array,
+    numeric: Union[KLUHandleManager, Array],
+    symbolic: Union[KLUHandleManager, Array],
+) -> Tuple[Array, KLUHandleManager]:
+    """Fused in-place refactorization followed by triangular solve.
+
+    Equivalent to calling refactor() then solve_with_numeric(), but executes as a
+    single C++ kernel call. This avoids allocating the COO→CSC work buffer twice
+    and saves a JAX dispatch round-trip, which matters in tight iteration loops.
+
+    The numeric factorization is modified in-place (same behaviour as refactor()).
+    The returned KLUHandleManager wraps the same underlying pointer as the input
+    numeric handle with owner=False — the original owner is still responsible for
+    calling free_numeric.
+
+    Args:
+        Ai: [n_nz; int32]: the row indices of the sparse matrix A
+        Aj: [n_nz; int32]: the column indices of the sparse matrix A
+        Ax: [n_lhs? x n_nz; float64|complex128]: the values of the sparse matrix A
+        b:  [n_lhs? x n_col x n_rhs?; float64|complex128]: the right-hand side
+        numeric: [KLUHandleManager|Array]: existing numeric factorization (modified in-place)
+        symbolic: [KLUHandleManager|Array]: the symbolic analysis object or handle
+
+    Returns:
+        (x, numeric): solution array and the updated numeric handle
+                      (same pointer as input, owner=False, for XLA dep tracking)
+
+    """
+    num_h = getattr(numeric, "handle", numeric)
+    sym_h = getattr(symbolic, "handle", symbolic)
+    x, raw_numeric = _refactor_and_solve_jit(Ai, Aj, Ax, b, sym_h, num_h)
+    return x, KLUHandleManager(raw_numeric, free_numeric, owner=False)
+
 
 # Primitives ==========================================================================
 
@@ -505,14 +634,22 @@ solve_c128 = jax.extend.core.Primitive("solve_c128")
 analyze_p = jax.extend.core.Primitive("analyze")
 solve_with_symbol_f64 = jax.extend.core.Primitive("solve_with_symbol_f64")
 solve_with_symbol_c128 = jax.extend.core.Primitive("solve_with_symbol_c128")
+tsolve_with_symbol_f64 = jax.extend.core.Primitive("tsolve_with_symbol_f64")
+tsolve_with_symbol_c128 = jax.extend.core.Primitive("tsolve_with_symbol_c128")
 free_symbolic_p = jax.extend.core.Primitive("free_symbolic")
 factor_f64 = jax.extend.core.Primitive("factor_f64")
 factor_c128 = jax.extend.core.Primitive("factor_c128")
 solve_with_numeric_f64 = jax.extend.core.Primitive("solve_with_numeric_f64")
 solve_with_numeric_c128 = jax.extend.core.Primitive("solve_with_numeric_c128")
+tsolve_with_numeric_f64 = jax.extend.core.Primitive("tsolve_with_numeric_f64")
+tsolve_with_numeric_c128 = jax.extend.core.Primitive("tsolve_with_numeric_c128")
 free_numeric_p = jax.extend.core.Primitive("free_numeric")
 refactor_f64 = jax.extend.core.Primitive("refactor_f64")
 refactor_c128 = jax.extend.core.Primitive("refactor_c128")
+refactor_and_solve_f64 = jax.extend.core.Primitive("refactor_and_solve_f64")
+refactor_and_solve_c128 = jax.extend.core.Primitive("refactor_and_solve_c128")
+refactor_and_solve_f64.multiple_results = True
+refactor_and_solve_c128.multiple_results = True
 
 # Implementations =====================================================================
 
@@ -549,6 +686,16 @@ def solve_with_symbol_c128_impl(
     Ai: Array, Aj: Array, Ax: Array, b: Array, symbolic: Array
 ) -> Array:
     return general_impl("solve_with_symbol_c128", Ai, Aj, Ax, b, symbolic)
+
+
+@tsolve_with_symbol_f64.def_impl
+def tsolve_with_symbol_f64_impl(Ai: Array, Aj: Array, Ax: Array, b: Array, symbolic: Array) -> Array:
+    return general_impl("tsolve_with_symbol_f64", Ai, Aj, Ax, b, symbolic)
+
+
+@tsolve_with_symbol_c128.def_impl
+def tsolve_with_symbol_c128_impl(Ai: Array, Aj: Array, Ax: Array, b: Array, symbolic: Array) -> Array:
+    return general_impl("tsolve_with_symbol_c128", Ai, Aj, Ax, b, symbolic)
 
 
 @analyze_p.def_impl
@@ -598,6 +745,34 @@ def solve_with_numeric_c128_impl(symbolic, numeric, b):
         "solve_with_numeric_c128", jax.ShapeDtypeStruct(b.shape, b.dtype)
     )
     return call(symbolic, numeric, b)
+
+@tsolve_with_numeric_f64.def_impl
+def tsolve_with_numeric_f64_impl(symbolic, numeric, b):
+    call = jax.ffi.ffi_call("tsolve_with_numeric_f64", jax.ShapeDtypeStruct(b.shape, b.dtype))
+    return call(symbolic, numeric, b)
+
+@tsolve_with_numeric_c128.def_impl
+def tsolve_with_numeric_c128_impl(symbolic, numeric, b):
+    call = jax.ffi.ffi_call("tsolve_with_numeric_c128", jax.ShapeDtypeStruct(b.shape, b.dtype))
+    return call(symbolic, numeric, b)
+
+@refactor_and_solve_f64.def_impl
+def refactor_and_solve_f64_impl(Ai, Aj, Ax, b, symbolic, numeric):
+    n_lhs = Ax.shape[0]
+    call = jax.ffi.ffi_call(
+        "refactor_and_solve_f64",
+        (jax.ShapeDtypeStruct(b.shape, b.dtype), jax.ShapeDtypeStruct((n_lhs,), jnp.uint64)),
+    )
+    return call(Ai, Aj, Ax, b, symbolic, numeric)
+
+@refactor_and_solve_c128.def_impl
+def refactor_and_solve_c128_impl(Ai, Aj, Ax, b, symbolic, numeric):
+    n_lhs = Ax.shape[0]
+    call = jax.ffi.ffi_call(
+        "refactor_and_solve_c128",
+        (jax.ShapeDtypeStruct(b.shape, b.dtype), jax.ShapeDtypeStruct((n_lhs,), jnp.uint64)),
+    )
+    return call(Ai, Aj, Ax, b, symbolic, numeric)
 
 
 def general_impl(
@@ -683,6 +858,24 @@ solve_with_symbol_c128_low = mlir.lower_fun(
 mlir.register_lowering(solve_with_symbol_c128, solve_with_symbol_c128_low)
 
 jax.ffi.register_ffi_target(
+    "tsolve_with_symbol_f64",
+    klujax_cpp.tsolve_with_symbol_f64(),
+    platform="cpu",
+)
+
+tsolve_with_symbol_f64_low = mlir.lower_fun(tsolve_with_symbol_f64_impl, multiple_results=False)
+mlir.register_lowering(tsolve_with_symbol_f64, tsolve_with_symbol_f64_low)
+
+jax.ffi.register_ffi_target(
+    "tsolve_with_symbol_c128",
+    klujax_cpp.tsolve_with_symbol_c128(),
+    platform="cpu",
+)
+
+tsolve_with_symbol_c128_low = mlir.lower_fun(tsolve_with_symbol_c128_impl, multiple_results=False)
+mlir.register_lowering(tsolve_with_symbol_c128, tsolve_with_symbol_c128_low)
+
+jax.ffi.register_ffi_target(
     "free_symbolic",
     klujax_cpp.free_symbolic(),
     platform="cpu",
@@ -744,6 +937,22 @@ solve_with_numeric_c128_low = mlir.lower_fun(
 )
 mlir.register_lowering(solve_with_numeric_c128, solve_with_numeric_c128_low)
 
+jax.ffi.register_ffi_target("tsolve_with_numeric_f64", klujax_cpp.tsolve_with_numeric_f64(), platform="cpu")
+tsolve_with_numeric_f64_low = mlir.lower_fun(tsolve_with_numeric_f64_impl, multiple_results=False)
+mlir.register_lowering(tsolve_with_numeric_f64, tsolve_with_numeric_f64_low)
+
+jax.ffi.register_ffi_target("tsolve_with_numeric_c128", klujax_cpp.tsolve_with_numeric_c128(), platform="cpu")
+tsolve_with_numeric_c128_low = mlir.lower_fun(tsolve_with_numeric_c128_impl, multiple_results=False)
+mlir.register_lowering(tsolve_with_numeric_c128, tsolve_with_numeric_c128_low)
+
+jax.ffi.register_ffi_target("refactor_and_solve_f64", klujax_cpp.refactor_and_solve_f64(), platform="cpu")
+refactor_and_solve_f64_low = mlir.lower_fun(refactor_and_solve_f64_impl, multiple_results=True)
+mlir.register_lowering(refactor_and_solve_f64, refactor_and_solve_f64_low)
+
+jax.ffi.register_ffi_target("refactor_and_solve_c128", klujax_cpp.refactor_and_solve_c128(), platform="cpu")
+refactor_and_solve_c128_low = mlir.lower_fun(refactor_and_solve_c128_impl, multiple_results=True)
+mlir.register_lowering(refactor_and_solve_c128, refactor_and_solve_c128_low)
+
 free_numeric_low = mlir.lower_fun(free_numeric_impl, multiple_results=False)
 mlir.register_lowering(free_numeric_p, free_numeric_low)
 
@@ -789,9 +998,17 @@ def refactor_abstract_eval(Ai, Aj, Ax, symbolic, numeric):
 
 @solve_with_numeric_f64.def_abstract_eval
 @solve_with_numeric_c128.def_abstract_eval
+@tsolve_with_numeric_f64.def_abstract_eval
+@tsolve_with_numeric_c128.def_abstract_eval
 def solve_with_numeric_abstract_eval(symbolic, numeric, b):
     # Output has same shape as input b
     return ShapedArray(b.shape, b.dtype)
+
+@refactor_and_solve_f64.def_abstract_eval
+@refactor_and_solve_c128.def_abstract_eval
+def refactor_and_solve_abstract_eval(Ai, Aj, Ax, b, symbolic, numeric):
+    # Returns (x with same shape as b, out_numeric with same shape as numeric)
+    return ShapedArray(b.shape, b.dtype), ShapedArray(numeric.shape, jnp.uint64)
 
 
 # Forward Differentiation =============================================================
@@ -942,6 +1159,26 @@ def solve_with_symbol_c128_vmap(
 batching.primitive_batchers[solve_with_symbol_c128] = solve_with_symbol_c128_vmap
 
 
+def tsolve_with_symbol_f64_vmap(
+    vector_arg_values: tuple[Array, Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    return general_vmap_with_symbol(tsolve_with_symbol_f64, vector_arg_values, batch_axes)
+
+
+batching.primitive_batchers[tsolve_with_symbol_f64] = tsolve_with_symbol_f64_vmap
+
+
+def tsolve_with_symbol_c128_vmap(
+    vector_arg_values: tuple[Array, Array, Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    return general_vmap_with_symbol(tsolve_with_symbol_c128, vector_arg_values, batch_axes)
+
+
+batching.primitive_batchers[tsolve_with_symbol_c128] = tsolve_with_symbol_c128_vmap
+
+
 def solve_with_numeric_f64_vmap(
     vector_arg_values: tuple[Array, Array, Array],
     batch_axes: tuple[int | None, int | None, int | None],
@@ -964,6 +1201,26 @@ def solve_with_numeric_c128_vmap(
 
 
 batching.primitive_batchers[solve_with_numeric_c128] = solve_with_numeric_c128_vmap
+
+
+def tsolve_with_numeric_f64_vmap(
+    vector_arg_values: tuple[Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    return general_vmap_with_numeric(tsolve_with_numeric_f64, vector_arg_values, batch_axes)
+
+
+batching.primitive_batchers[tsolve_with_numeric_f64] = tsolve_with_numeric_f64_vmap
+
+
+def tsolve_with_numeric_c128_vmap(
+    vector_arg_values: tuple[Array, Array, Array],
+    batch_axes: tuple[int | None, int | None, int | None],
+) -> tuple[Array, int]:
+    return general_vmap_with_numeric(tsolve_with_numeric_c128, vector_arg_values, batch_axes)
+
+
+batching.primitive_batchers[tsolve_with_numeric_c128] = tsolve_with_numeric_c128_vmap
 
 
 def factor_f64_vmap(
