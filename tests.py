@@ -549,6 +549,129 @@ def test_solve_with_symbol_jvp():
     assert primals.shape == (2,)
     assert tangents.shape == (2,)
 
+@log_test_name
+@parametrize_dtypes
+def test_tsolve_with_symbol(dtype):
+    Ai, Aj, Ax, b = _get_rand_arrs_1d(15, (n_col := 5), dtype=dtype)
+    symbolic = klujax.analyze(Ai, Aj, n_col)
+
+    x_sp = klujax.tsolve_with_symbol(Ai, Aj, Ax, b, symbolic)
+
+    # For tsolve, we compare against the transposed dense matrix A.T
+    A = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax)
+    x = jsp.linalg.solve(A.T, b)
+    _log_and_test_equality(x, x_sp)
+
+    # Test JIT
+    x_sp_jit = jax.jit(klujax.tsolve_with_symbol)(Ai, Aj, Ax, b, symbolic)
+    _log_and_test_equality(x, x_sp_jit)
+
+    klujax.free_symbolic(symbolic)
+
+
+@log_test_name
+@parametrize_dtypes
+def test_tsolve_with_symbol_batched(dtype):
+    Ai, Aj, Ax, b = _get_rand_arrs_2d((n_lhs := 3), 15, (n_col := 5), dtype=dtype)
+    symbolic = klujax.analyze(Ai, Aj, n_col)
+
+    x_sp = klujax.tsolve_with_symbol(Ai, Aj, Ax, b, symbolic)
+
+    # Dense verification for batched transpose
+    op_dense = jax.vmap(jsp.linalg.solve, (0, 0), 0)
+    A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
+    A_T = jnp.swapaxes(A, -1, -2)
+    x = op_dense(A_T, b)
+    _log_and_test_equality(x, x_sp)
+
+    klujax.free_symbolic(symbolic)
+
+
+@log_test_name
+@parametrize_dtypes
+def test_tsolve_with_numeric(dtype):
+    Ai, Aj, Ax, b = _get_rand_arrs_1d(15, (n_col := 5), dtype=dtype)
+    symbolic = klujax.analyze(Ai, Aj, n_col)
+    numeric = klujax.factor(Ai, Aj, Ax, symbolic)
+
+    x_sp = klujax.tsolve_with_numeric(numeric, b, symbolic)
+
+    A = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax)
+    x = jsp.linalg.solve(A.T, b)
+    _log_and_test_equality(x, x_sp)
+
+    klujax.free_numeric(numeric)
+    klujax.free_symbolic(symbolic)
+
+
+@log_test_name
+@parametrize_dtypes
+def test_tsolve_with_numeric_batched(dtype):
+    Ai, Aj, Ax, b = _get_rand_arrs_2d((n_lhs := 3), 15, (n_col := 5), dtype=dtype)
+    symbolic = klujax.analyze(Ai, Aj, n_col)
+    numeric = klujax.factor(Ai, Aj, Ax, symbolic)
+
+    x_sp = klujax.tsolve_with_numeric(numeric, b, symbolic)
+
+    # Dense verification for batched transpose
+    op_dense = jax.vmap(jsp.linalg.solve, (0, 0), 0)
+    A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
+    A_T = jnp.swapaxes(A, -1, -2)
+    x = op_dense(A_T, b)
+    _log_and_test_equality(x, x_sp)
+
+    klujax.free_numeric(numeric)
+    klujax.free_symbolic(symbolic)
+
+
+@log_test_name
+@parametrize_dtypes
+def test_refactor_and_solve(dtype):
+    Ai, Aj, Ax, b = _get_rand_arrs_1d(15, (n_col := 5), dtype=dtype)
+    Ax2 = _make_ax2(Ai, Aj, Ax, dtype=dtype)
+    b2 = jax.random.normal(jax.random.PRNGKey(43), b.shape, dtype=dtype)
+
+    sym = klujax.analyze(Ai, Aj, n_col)
+    num = klujax.factor(Ai, Aj, Ax, sym)
+
+    # Verifying specific API order: Ai, Aj, Ax, b, numeric, symbolic
+    x_sp, num2 = klujax.refactor_and_solve(Ai, Aj, Ax2, b2, num, sym)
+    
+    assert isinstance(num2, klujax.KLUHandleManager)
+    assert num2._owner is False
+
+    A2 = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax2)
+    x = jsp.linalg.solve(A2, b2)
+    _log_and_test_equality(x, x_sp)
+
+    # Original handle must be manually freed because num2 is owner=False
+    klujax.free_numeric(num)
+    klujax.free_symbolic(sym)
+
+
+@log_test_name
+@parametrize_dtypes
+def test_refactor_and_solve_batched(dtype):
+    Ai, Aj, Ax, b = _get_rand_arrs_2d((n_lhs := 3), 15, (n_col := 5), dtype=dtype)
+    Ax2 = _make_ax2(Ai, Aj, Ax, dtype=dtype)
+    b2 = jax.random.normal(jax.random.PRNGKey(43), b.shape, dtype=dtype)
+
+    sym = klujax.analyze(Ai, Aj, n_col)
+    num = klujax.factor(Ai, Aj, Ax, sym)
+
+    # Verifying specific API order: Ai, Aj, Ax, b, numeric, symbolic
+    x_sp, num2 = klujax.refactor_and_solve(Ai, Aj, Ax2, b2, num, sym)
+    
+    assert isinstance(num2, klujax.KLUHandleManager)
+    assert num2._owner is False
+
+    op_dense = jax.vmap(jsp.linalg.solve, (0, 0), 0)
+    A2 = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax2)
+    x = op_dense(A2, b2)
+    _log_and_test_equality(x, x_sp)
+
+    klujax.free_numeric(num)
+    klujax.free_symbolic(sym)
 
 # KLUHandleManager testing
 
