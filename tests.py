@@ -549,6 +549,7 @@ def test_solve_with_symbol_jvp():
     assert primals.shape == (2,)
     assert tangents.shape == (2,)
 
+
 @log_test_name
 @parametrize_dtypes
 def test_tsolve_with_symbol(dtype):
@@ -636,7 +637,7 @@ def test_refactor_and_solve(dtype):
 
     # Verifying specific API order: Ai, Aj, Ax, b, numeric, symbolic
     x_sp, num2 = klujax.refactor_and_solve(Ai, Aj, Ax2, b2, num, sym)
-    
+
     assert isinstance(num2, klujax.KLUHandleManager)
     assert num2._owner is False
 
@@ -661,7 +662,7 @@ def test_refactor_and_solve_batched(dtype):
 
     # Verifying specific API order: Ai, Aj, Ax, b, numeric, symbolic
     x_sp, num2 = klujax.refactor_and_solve(Ai, Aj, Ax2, b2, num, sym)
-    
+
     assert isinstance(num2, klujax.KLUHandleManager)
     assert num2._owner is False
 
@@ -672,6 +673,7 @@ def test_refactor_and_solve_batched(dtype):
 
     klujax.free_numeric(num)
     klujax.free_symbolic(sym)
+
 
 # KLUHandleManager testing
 

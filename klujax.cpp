@@ -864,7 +864,7 @@ ffi::Error refactor_and_solve_impl(
     // Validate b dimensions: must be 3D (n_lhs, n_col, n_rhs)
     if (ds_b.size() != 3) return ffi::Error::InvalidArgument("b must be 3D (n_lhs, n_col, n_rhs)");
     int n_lhs_b = (int)ds_b[0];
-    int n_rhs   = (int)ds_b[2];
+    int n_rhs = (int)ds_b[2];
 
     if (n_lhs_ax != n_lhs_b) return ffi::Error::InvalidArgument("n_lhs mismatch between Ax and b");
 
@@ -1146,7 +1146,6 @@ ffi::Error tsolve_with_numeric_impl(
     const ffi::Buffer<ffi::DataType::U64>& numeric,
     const T* _b,
     T* _x) {
-
     if (symbolic.element_count() != 1) return ffi::Error::InvalidArgument("symbolic must be scalar");
     uint64_t sym_addr = *symbolic.typed_data();
     if (sym_addr == 0) return ffi::Error::InvalidArgument("symbolic pointer is null");
