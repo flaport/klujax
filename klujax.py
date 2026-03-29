@@ -1916,31 +1916,27 @@ def solve_with_symbol_transpose(
     b: Array,
     symbolic: Array,
 ) -> tuple[Array, Array, Array, Array, None]:
-    """Compute the transpose of solve_with_symbol.
+    if ad.is_undefined_primal(Ai) or ad.is_undefined_primal(Aj):
+        msg = "Sparse indices Ai and Aj should not require gradients."
+        raise ValueError(msg)
 
-    Note:
-        For the reverse pass (A.T), we cannot reuse the 'symbolic' handle because
-        it describes A, not A.T. Therefore, we fallback to the standard solve_transpose
-        logic which effectively treats it like a fresh solve.
+    # Pick the right tsolve primitive
+    if solve_prim is solve_with_symbol_f64:
+        tsolve_prim = tsolve_with_symbol_f64
+    else:
+        tsolve_prim = tsolve_with_symbol_c128
 
-    Args:
-        solve_prim: [Primitive]: the primitive to transpose
-        ct: [Array]: the cotangent vector
-        Ai: [n_nz; int32]: the row indices of the sparse matrix A
-        Aj: [n_nz; int32]: the column indices of the sparse matrix A
-        Ax: [n_lhs? x n_nz; float64|complex128]: the values of the sparse matrix A
-        b:  [n_lhs? x n_col x n_rhs?; float64|complex128]: the target vector
-        symbolic: [Array]: the symbolic analysis handle
+    if ad.is_undefined_primal(b):
+        # FAST PATH: Backpropagate through b using the reused handle!
+        b_bar = tsolve_prim.bind(Ai, Aj, Ax, ct, symbolic)
+        return Ai, Aj, Ax, b_bar, None
 
-    Returns:
-        tangents: tuple of tangents for (Ai, Aj, Ax, b, symbolic)
+    if ad.is_undefined_primal(Ax):
+        Ax_bar = -(ct * tsolve_prim.bind(Ai, Aj, Ax, b, symbolic)).sum(-1)
+        return Ai, Aj, Ax_bar, b, None
 
-    """
-    base_solve = solve_f64 if solve_prim is solve_with_symbol_f64 else solve_c128
-
-    t_Ai, t_Aj, t_Ax, t_b = solve_transpose(base_solve, ct, Ai, Aj, Ax, b)
-
-    return t_Ai, t_Aj, t_Ax, t_b, None
+    msg = "No undefined primals in transpose."
+    raise ValueError(msg)
 
 
 def solve_with_symbol_f64_transpose(ct, Ai, Aj, Ax, b, symbolic):
