@@ -1955,3 +1955,98 @@ def solve_with_symbol_c128_transpose(ct, Ai, Aj, Ax, b, symbolic):
 
 
 ad.primitive_transposes[solve_with_symbol_c128] = solve_with_symbol_c128_transpose
+
+
+# Differentiation rules for solve_with_numeric ================================
+
+
+def solve_with_numeric_value_and_jvp(
+    prim_solve: jax.extend.core.Primitive,
+    arg_values: tuple[Array, Array, Array],
+    arg_tangents: tuple[Any, Any, Any],
+) -> tuple[Array, Array]:
+    """Jacobian-vector product rule for `solve_with_numeric`.
+
+    Since the matrix values are baked into the numeric handle, we only track
+    gradients with respect to `b`. The rule is simply: dx = A^-1 * db.
+    """
+    symbolic, numeric, b = arg_values
+    _, _, t_b = arg_tangents
+
+    x = prim_solve.bind(symbolic, numeric, b)
+
+    if isinstance(t_b, ad.Zero):
+        dx = jnp.zeros_like(x)
+    else:
+        dx = prim_solve.bind(symbolic, numeric, t_b)
+
+    return x, dx
+
+
+def solve_with_numeric_f64_value_and_jvp(
+    arg_values: tuple[Array, Array, Array],
+    arg_tangents: tuple[Any, Any, Any],
+) -> tuple[Array, Array]:
+    return solve_with_numeric_value_and_jvp(
+        solve_with_numeric_f64, arg_values, arg_tangents
+    )
+
+
+ad.primitive_jvps[solve_with_numeric_f64] = solve_with_numeric_f64_value_and_jvp
+
+
+def solve_with_numeric_c128_value_and_jvp(
+    arg_values: tuple[Array, Array, Array],
+    arg_tangents: tuple[Any, Any, Any],
+) -> tuple[Array, Array]:
+    return solve_with_numeric_value_and_jvp(
+        solve_with_numeric_c128, arg_values, arg_tangents
+    )
+
+
+ad.primitive_jvps[solve_with_numeric_c128] = solve_with_numeric_c128_value_and_jvp
+
+
+def solve_with_numeric_transpose(
+    solve_prim: jax.extend.core.Primitive,
+    ct: Array,
+    symbolic: Array,
+    numeric: Array,
+    b: Array,
+) -> tuple[None, None, Array]:
+    """Compute the transpose of solve_with_numeric.
+
+    Uses the new tsolve primitives to efficiently solve A^T x_bar = b_bar
+    using the existing numeric factorization handle.
+    """
+    tsolve_prim = (
+        tsolve_with_numeric_f64
+        if solve_prim is solve_with_numeric_f64
+        else tsolve_with_numeric_c128
+    )
+
+    if ad.is_undefined_primal(b):
+        b_bar = tsolve_prim.bind(symbolic, numeric, ct)
+        # return None for symbolic and numeric handles, since they don't take gradients
+        return None, None, b_bar
+
+    msg = "No undefined primals in transpose."
+    raise ValueError(msg)
+
+
+def solve_with_numeric_f64_transpose(ct, symbolic, numeric, b):
+    return solve_with_numeric_transpose(
+        solve_with_numeric_f64, ct, symbolic, numeric, b
+    )
+
+
+ad.primitive_transposes[solve_with_numeric_f64] = solve_with_numeric_f64_transpose
+
+
+def solve_with_numeric_c128_transpose(ct, symbolic, numeric, b):
+    return solve_with_numeric_transpose(
+        solve_with_numeric_c128, ct, symbolic, numeric, b
+    )
+
+
+ad.primitive_transposes[solve_with_numeric_c128] = solve_with_numeric_c128_transpose
