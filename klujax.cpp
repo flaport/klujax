@@ -140,6 +140,9 @@ struct KluTraits<double> {
     static int solve(klu_symbolic* Symbolic, klu_numeric* Numeric, int d, int nrhs, double* B, klu_common* Common) {
         return klu_solve(Symbolic, Numeric, d, nrhs, B, Common);
     }
+    static int tsolve(klu_symbolic* Symbolic, klu_numeric* Numeric, int d, int nrhs, double* B, klu_common* Common) {
+        return klu_tsolve(Symbolic, Numeric, d, nrhs, B, Common);
+    }
 };
 
 template <>
@@ -152,6 +155,10 @@ struct KluTraits<Complex> {
     }
     static int solve(klu_symbolic* Symbolic, klu_numeric* Numeric, int d, int nrhs, Complex* B, klu_common* Common) {
         return klu_z_solve(Symbolic, Numeric, d, nrhs, reinterpret_cast<double*>(B), Common);
+    }
+    // conj_solve=0 gives plain transpose A^T; use 1 for conjugate transpose A^H
+    static int tsolve(klu_symbolic* Symbolic, klu_numeric* Numeric, int d, int nrhs, Complex* B, klu_common* Common) {
+        return klu_z_tsolve(Symbolic, Numeric, d, nrhs, reinterpret_cast<double*>(B), 0, Common);
     }
 };
 
@@ -501,6 +508,133 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::DataType::C128>>()  // x
 );
 
+// tsolve_with_symbol: identical to solve_with_symbol_impl but uses KluTraits<T>::tsolve
+// Solves A^T x = b (transpose solve) reusing a pre-computed symbolic factorization.
+template <typename T>
+ffi::Error tsolve_with_symbol_impl(
+    const ffi::Buffer<ffi::DataType::S32>& Ai,
+    const ffi::Buffer<ffi::DataType::S32>& Aj,
+    const ffi::AnyBuffer::Dimensions& ds_Ax,
+    const ffi::AnyBuffer::Dimensions& ds_b,
+    const ffi::Buffer<ffi::DataType::U64>& symbolic,
+    const T* _Ax,
+    const T* _b,
+    T* _x) {
+    if (symbolic.element_count() != 1) return ffi::Error::InvalidArgument("symbolic must be scalar");
+    uint64_t sym_addr = *symbolic.typed_data();
+    if (sym_addr == 0) return ffi::Error::InvalidArgument("symbolic pointer is null");
+    klu_symbolic* Symbolic = reinterpret_cast<klu_symbolic*>(sym_addr);
+
+    ffi::Error err = validate_args(Ai, Aj, ds_Ax, ds_b);
+    if (err.failure()) {
+        return err;
+    }
+
+    int n_lhs = (int)ds_b[0];
+    int n_col = (int)ds_b[1];
+    int n_rhs = (int)ds_b[2];
+    int n_nz = (int)ds_Ax[1];
+    const int* _Ai = Ai.typed_data();
+    const int* _Aj = Aj.typed_data();
+
+    auto _Bk = std::make_unique<int[]>(n_nz);
+    auto _Bi = std::make_unique<int[]>(n_nz);
+    auto _Bp = std::make_unique<int[]>(n_col + 1);
+    auto _Bx = std::make_unique<T[]>(n_nz);
+
+    coo_to_csc_analyze(n_col, n_nz, _Ai, _Aj, _Bi.get(), _Bp.get(), _Bk.get());
+
+    auto _x_temp = std::make_unique<T[]>(n_lhs * n_col * n_rhs);
+    for (int m = 0; m < n_lhs; m++) {
+        for (int n = 0; n < n_col; n++) {
+            for (int p = 0; p < n_rhs; p++) {
+                _x_temp[m * n_rhs * n_col + p * n_col + n] = _b[m * n_col * n_rhs + n * n_rhs + p];
+            }
+        }
+    }
+
+    klu_common Common;
+    klu_defaults(&Common);
+
+    klu_numeric* Numeric;
+    for (int i = 0; i < n_lhs; i++) {
+        int m = i * n_nz;
+        int n = i * n_rhs * n_col;
+
+        for (int k = 0; k < n_nz; k++) {
+            _Bx[k] = _Ax[m + _Bk[k]];
+        }
+
+        Numeric = KluTraits<T>::factor(_Bp.get(), _Bi.get(), _Bx.get(), Symbolic, &Common);
+        if (Numeric == nullptr || Common.status < KLU_OK) {
+            return ffi::Error::InvalidArgument("klu_factor/z_factor failed (singular matrix?)");
+        }
+        // NOTE: tsolve instead of solve
+        KluTraits<T>::tsolve(Symbolic, Numeric, n_col, n_rhs, &_x_temp[n], &Common);
+        if (Common.status < KLU_OK) {
+            klu_free_numeric(&Numeric, &Common);
+            return ffi::Error::InvalidArgument("klu_tsolve/z_tsolve failed");
+        }
+        klu_free_numeric(&Numeric, &Common);
+    }
+
+    for (int m = 0; m < n_lhs; m++) {
+        for (int n = 0; n < n_col; n++) {
+            for (int p = 0; p < n_rhs; p++) {
+                _x[m * n_col * n_rhs + n * n_rhs + p] = _x_temp[m * n_rhs * n_col + p * n_col + n];
+            }
+        }
+    }
+
+    return ffi::Error::Success();
+}
+
+ffi::Error tsolve_with_symbol_f64(
+    const ffi::Buffer<ffi::DataType::S32> Ai,
+    const ffi::Buffer<ffi::DataType::S32> Aj,
+    const ffi::Buffer<ffi::DataType::F64> Ax,
+    const ffi::Buffer<ffi::DataType::F64> b,
+    const ffi::Buffer<ffi::DataType::U64> symbolic,
+    ffi::Result<ffi::Buffer<ffi::DataType::F64>> x) {
+    return tsolve_with_symbol_impl<double>(Ai, Aj, Ax.dimensions(), b.dimensions(), symbolic,
+                                           Ax.typed_data(), b.typed_data(), x->typed_data());
+}
+
+ffi::Error tsolve_with_symbol_c128(
+    const ffi::Buffer<ffi::DataType::S32> Ai,
+    const ffi::Buffer<ffi::DataType::S32> Aj,
+    const ffi::Buffer<ffi::DataType::C128> Ax,
+    const ffi::Buffer<ffi::DataType::C128> b,
+    const ffi::Buffer<ffi::DataType::U64> symbolic,
+    ffi::Result<ffi::Buffer<ffi::DataType::C128>> x) {
+    return tsolve_with_symbol_impl<Complex>(Ai, Aj, Ax.dimensions(), b.dimensions(), symbolic,
+                                            reinterpret_cast<const Complex*>(Ax.typed_data()),
+                                            reinterpret_cast<const Complex*>(b.typed_data()),
+                                            reinterpret_cast<Complex*>(x->typed_data()));
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    tsolve_with_symbol_f64_handler, tsolve_with_symbol_f64,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Ai
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Aj
+        .Arg<ffi::Buffer<ffi::DataType::F64>>()  // Ax
+        .Arg<ffi::Buffer<ffi::DataType::F64>>()  // b
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()  // symbolic
+        .Ret<ffi::Buffer<ffi::DataType::F64>>()  // x
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    tsolve_with_symbol_c128_handler, tsolve_with_symbol_c128,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()   // Ai
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()   // Aj
+        .Arg<ffi::Buffer<ffi::DataType::C128>>()  // Ax
+        .Arg<ffi::Buffer<ffi::DataType::C128>>()  // b
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()   // symbolic
+        .Ret<ffi::Buffer<ffi::DataType::C128>>()  // x
+);
+
 template <typename T>
 ffi::Error factor_impl(
     const ffi::Buffer<ffi::DataType::S32>& Ai,
@@ -698,6 +832,166 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::DataType::U64>>()   // out_numeric (same handles, for XLA dep edge)
 );
 
+// refactor_and_solve: fused in-place refactorization followed by triangular solve.
+// Avoids allocating the CSC buffer twice and saves a JAX dispatch round-trip.
+// Returns two outputs: x (the solution) and out_numeric (same pointers as input numeric,
+// threaded through so XLA sees the dependency edge: refactor → solve → next-op).
+template <typename T>
+ffi::Error refactor_and_solve_impl(
+    const ffi::Buffer<ffi::DataType::S32>& Ai,
+    const ffi::Buffer<ffi::DataType::S32>& Aj,
+    const ffi::AnyBuffer::Dimensions& ds_Ax,
+    const ffi::AnyBuffer::Dimensions& ds_b,
+    const ffi::Buffer<ffi::DataType::U64>& symbolic,
+    const ffi::Buffer<ffi::DataType::U64>& numeric,
+    const T* _Ax,
+    const T* _b,
+    T* _x,
+    uint64_t* _out_numeric) {
+    if (symbolic.element_count() != 1) return ffi::Error::InvalidArgument("symbolic must be scalar");
+    uint64_t sym_addr = *symbolic.typed_data();
+    if (sym_addr == 0) return ffi::Error::InvalidArgument("symbolic pointer is null");
+    klu_symbolic* Symbolic = reinterpret_cast<klu_symbolic*>(sym_addr);
+
+    int n_lhs_ax = (int)ds_Ax[0];
+    int n_nz = (int)ds_Ax[1];
+    int n_col = Symbolic->n;
+
+    if (Ai.dimensions().size() != 1 || Aj.dimensions().size() != 1) return ffi::Error::InvalidArgument("Ai/Aj must be 1D");
+    if (Ai.dimensions()[0] != n_nz || Aj.dimensions()[0] != n_nz) return ffi::Error::InvalidArgument("Ai/Aj size mismatch with Ax");
+    if ((int)numeric.element_count() != n_lhs_ax) return ffi::Error::InvalidArgument("numeric array size must match n_lhs");
+
+    // Validate b dimensions: must be 3D (n_lhs, n_col, n_rhs)
+    if (ds_b.size() != 3) return ffi::Error::InvalidArgument("b must be 3D (n_lhs, n_col, n_rhs)");
+    int n_lhs_b = (int)ds_b[0];
+    int n_rhs = (int)ds_b[2];
+
+    if (n_lhs_ax != n_lhs_b) return ffi::Error::InvalidArgument("n_lhs mismatch between Ax and b");
+
+    int n_lhs = n_lhs_ax;
+
+    const int* _Ai = Ai.typed_data();
+    const int* _Aj = Aj.typed_data();
+    const uint64_t* _numeric = numeric.typed_data();
+
+    auto _Bk = std::make_unique<int[]>(n_nz);
+    auto _Bi = std::make_unique<int[]>(n_nz);
+    auto _Bp = std::make_unique<int[]>(n_col + 1);
+    auto _Bx = std::make_unique<T[]>(n_nz);
+
+    coo_to_csc_analyze(n_col, n_nz, _Ai, _Aj, _Bi.get(), _Bp.get(), _Bk.get());
+
+    // Transpose b into col-major temp buffer for KLU
+    auto _x_temp = std::make_unique<T[]>(n_lhs * n_col * n_rhs);
+    for (int m = 0; m < n_lhs; m++) {
+        for (int n = 0; n < n_col; n++) {
+            for (int p = 0; p < n_rhs; p++) {
+                _x_temp[m * n_rhs * n_col + p * n_col + n] = _b[m * n_col * n_rhs + n * n_rhs + p];
+            }
+        }
+    }
+
+    klu_common Common;
+    klu_defaults(&Common);
+
+    for (int i = 0; i < n_lhs; i++) {
+        uint64_t num_addr = _numeric[i];
+        if (num_addr == 0) return ffi::Error::InvalidArgument("numeric pointer is null");
+        klu_numeric* Numeric = reinterpret_cast<klu_numeric*>(num_addr);
+
+        int m = i * n_nz;
+        int n = i * n_rhs * n_col;
+
+        // Convert COO Ax to CSC Bx
+        for (int k = 0; k < n_nz; k++) {
+            _Bx[k] = _Ax[m + _Bk[k]];
+        }
+
+        // Refactor in-place (reuses pivots from original factor call)
+        int status = KluTraits<T>::refactor(_Bp.get(), _Bi.get(), _Bx.get(), Symbolic, Numeric, &Common);
+        if (!status || Common.status < KLU_OK) {
+            return ffi::Error::InvalidArgument("klu_refactor/z_refactor failed (singular matrix?)");
+        }
+
+        // Solve immediately using the freshly refactored numeric
+        KluTraits<T>::solve(Symbolic, Numeric, n_col, n_rhs, &_x_temp[n], &Common);
+        if (Common.status < KLU_OK) {
+            return ffi::Error::InvalidArgument("klu_solve/z_solve failed");
+        }
+
+        // Pass through the same numeric pointer for the XLA dependency edge
+        _out_numeric[i] = num_addr;
+    }
+
+    // Transpose result back to row-major for JAX
+    for (int m = 0; m < n_lhs; m++) {
+        for (int n = 0; n < n_col; n++) {
+            for (int p = 0; p < n_rhs; p++) {
+                _x[m * n_col * n_rhs + n * n_rhs + p] = _x_temp[m * n_rhs * n_col + p * n_col + n];
+            }
+        }
+    }
+
+    return ffi::Error::Success();
+}
+
+ffi::Error refactor_and_solve_f64(
+    const ffi::Buffer<ffi::DataType::S32> Ai,
+    const ffi::Buffer<ffi::DataType::S32> Aj,
+    const ffi::Buffer<ffi::DataType::F64> Ax,
+    const ffi::Buffer<ffi::DataType::F64> b,
+    const ffi::Buffer<ffi::DataType::U64> symbolic,
+    const ffi::Buffer<ffi::DataType::U64> numeric,
+    ffi::Result<ffi::Buffer<ffi::DataType::F64>> x,
+    ffi::Result<ffi::Buffer<ffi::DataType::U64>> out_numeric) {
+    return refactor_and_solve_impl<double>(
+        Ai, Aj, Ax.dimensions(), b.dimensions(), symbolic, numeric,
+        Ax.typed_data(), b.typed_data(), x->typed_data(), out_numeric->typed_data());
+}
+
+ffi::Error refactor_and_solve_c128(
+    const ffi::Buffer<ffi::DataType::S32> Ai,
+    const ffi::Buffer<ffi::DataType::S32> Aj,
+    const ffi::Buffer<ffi::DataType::C128> Ax,
+    const ffi::Buffer<ffi::DataType::C128> b,
+    const ffi::Buffer<ffi::DataType::U64> symbolic,
+    const ffi::Buffer<ffi::DataType::U64> numeric,
+    ffi::Result<ffi::Buffer<ffi::DataType::C128>> x,
+    ffi::Result<ffi::Buffer<ffi::DataType::U64>> out_numeric) {
+    return refactor_and_solve_impl<Complex>(
+        Ai, Aj, Ax.dimensions(), b.dimensions(), symbolic, numeric,
+        reinterpret_cast<const Complex*>(Ax.typed_data()),
+        reinterpret_cast<const Complex*>(b.typed_data()),
+        reinterpret_cast<Complex*>(x->typed_data()),
+        out_numeric->typed_data());
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    refactor_and_solve_f64_handler, refactor_and_solve_f64,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Ai
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()  // Aj
+        .Arg<ffi::Buffer<ffi::DataType::F64>>()  // Ax
+        .Arg<ffi::Buffer<ffi::DataType::F64>>()  // b
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()  // symbolic
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()  // numeric (input handles)
+        .Ret<ffi::Buffer<ffi::DataType::F64>>()  // x (solution)
+        .Ret<ffi::Buffer<ffi::DataType::U64>>()  // out_numeric (same handles, for XLA dep edge)
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    refactor_and_solve_c128_handler, refactor_and_solve_c128,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()   // Ai
+        .Arg<ffi::Buffer<ffi::DataType::S32>>()   // Aj
+        .Arg<ffi::Buffer<ffi::DataType::C128>>()  // Ax
+        .Arg<ffi::Buffer<ffi::DataType::C128>>()  // b
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()   // symbolic
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()   // numeric (input handles)
+        .Ret<ffi::Buffer<ffi::DataType::C128>>()  // x (solution)
+        .Ret<ffi::Buffer<ffi::DataType::U64>>()   // out_numeric (same handles, for XLA dep edge)
+);
+
 template <typename T>
 ffi::Error solve_with_numeric_impl(
     const ffi::AnyBuffer::Dimensions& ds_b,
@@ -842,6 +1136,140 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::Buffer<ffi::DataType::C128>>()
         .Ret<ffi::Buffer<ffi::DataType::C128>>());
 
+// tsolve_with_numeric: identical to solve_with_numeric_impl but uses KluTraits<T>::tsolve.
+// Solves A^T x = b using a pre-computed numeric factorization.
+template <typename T>
+ffi::Error tsolve_with_numeric_impl(
+    const ffi::AnyBuffer::Dimensions& ds_b,
+    const ffi::AnyBuffer::Dimensions& ds_x,
+    const ffi::Buffer<ffi::DataType::U64>& symbolic,
+    const ffi::Buffer<ffi::DataType::U64>& numeric,
+    const T* _b,
+    T* _x) {
+    if (symbolic.element_count() != 1) return ffi::Error::InvalidArgument("symbolic must be scalar");
+    uint64_t sym_addr = *symbolic.typed_data();
+    if (sym_addr == 0) return ffi::Error::InvalidArgument("symbolic pointer is null");
+    klu_symbolic* Symbolic = reinterpret_cast<klu_symbolic*>(sym_addr);
+
+    int n_numeric = numeric.element_count();
+    const uint64_t* _numeric = numeric.typed_data();
+
+    int d_b = ds_b.size();
+    int n_lhs_b, n_col, n_rhs;
+
+    if (d_b == 1) {
+        n_lhs_b = 1;
+        n_col = ds_b[0];
+        n_rhs = 1;
+    } else if (d_b == 2) {
+        if (n_numeric > 1 && (int)ds_b[0] == n_numeric) {
+            n_lhs_b = ds_b[0];
+            n_col = ds_b[1];
+            n_rhs = 1;
+        } else {
+            n_lhs_b = 1;
+            n_col = ds_b[0];
+            n_rhs = ds_b[1];
+        }
+    } else if (d_b == 3) {
+        n_lhs_b = ds_b[0];
+        n_col = ds_b[1];
+        n_rhs = ds_b[2];
+    } else {
+        return ffi::Error::InvalidArgument("b must be 1D, 2D, or 3D");
+    }
+
+    bool broadcast_numeric = (n_numeric == 1);
+    bool broadcast_b = (n_lhs_b == 1);
+
+    int n_lhs;
+    if (!broadcast_numeric && !broadcast_b) {
+        if (n_numeric != n_lhs_b) return ffi::Error::InvalidArgument("numeric and b batch size mismatch");
+        n_lhs = n_numeric;
+    } else if (!broadcast_numeric) {
+        n_lhs = n_numeric;
+    } else if (!broadcast_b) {
+        n_lhs = n_lhs_b;
+    } else {
+        n_lhs = 1;
+    }
+
+    if (ds_x.size() != d_b) return ffi::Error::InvalidArgument("output dimensions don't match input");
+
+    auto _x_temp = std::make_unique<T[]>(n_lhs * n_col * n_rhs);
+
+    for (int m = 0; m < n_lhs; m++) {
+        int m_b = broadcast_b ? 0 : m;
+        for (int n = 0; n < n_col; n++) {
+            for (int p = 0; p < n_rhs; p++) {
+                _x_temp[m * n_rhs * n_col + p * n_col + n] = _b[m_b * n_col * n_rhs + n * n_rhs + p];
+            }
+        }
+    }
+
+    klu_common Common;
+    klu_defaults(&Common);
+
+    for (int i = 0; i < n_lhs; i++) {
+        int n = i * n_rhs * n_col;
+        uint64_t num_addr = broadcast_numeric ? _numeric[0] : _numeric[i];
+        if (num_addr == 0) return ffi::Error::InvalidArgument("numeric pointer is null");
+
+        klu_numeric* Numeric = reinterpret_cast<klu_numeric*>(num_addr);
+        // NOTE: tsolve instead of solve
+        KluTraits<T>::tsolve(Symbolic, Numeric, n_col, n_rhs, &_x_temp[n], &Common);
+
+        if (Common.status < KLU_OK) {
+            return ffi::Error::InvalidArgument("klu_tsolve/z_tsolve failed");
+        }
+    }
+
+    for (int m = 0; m < n_lhs; m++) {
+        for (int n = 0; n < n_col; n++) {
+            for (int p = 0; p < n_rhs; p++) {
+                _x[m * n_col * n_rhs + n * n_rhs + p] = _x_temp[m * n_rhs * n_col + p * n_col + n];
+            }
+        }
+    }
+    return ffi::Error::Success();
+}
+
+ffi::Error tsolve_with_numeric_f64(
+    const ffi::Buffer<ffi::DataType::U64> symbolic,
+    const ffi::Buffer<ffi::DataType::U64> numeric,
+    const ffi::Buffer<ffi::DataType::F64> b,
+    ffi::Result<ffi::Buffer<ffi::DataType::F64>> x) {
+    return tsolve_with_numeric_impl<double>(b.dimensions(), x->dimensions(), symbolic, numeric, b.typed_data(), x->typed_data());
+}
+
+ffi::Error tsolve_with_numeric_c128(
+    const ffi::Buffer<ffi::DataType::U64> symbolic,
+    const ffi::Buffer<ffi::DataType::U64> numeric,
+    const ffi::Buffer<ffi::DataType::C128> b,
+    ffi::Result<ffi::Buffer<ffi::DataType::C128>> x) {
+    return tsolve_with_numeric_impl<Complex>(b.dimensions(), x->dimensions(), symbolic, numeric,
+                                             reinterpret_cast<const Complex*>(b.typed_data()),
+                                             reinterpret_cast<Complex*>(x->typed_data()));
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    tsolve_with_numeric_f64_handler, tsolve_with_numeric_f64,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()  // symbolic
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()  // numeric
+        .Arg<ffi::Buffer<ffi::DataType::F64>>()  // b
+        .Ret<ffi::Buffer<ffi::DataType::F64>>()  // x
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    tsolve_with_numeric_c128_handler, tsolve_with_numeric_c128,
+    ffi::Ffi::Bind()
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()   // symbolic
+        .Arg<ffi::Buffer<ffi::DataType::U64>>()   // numeric
+        .Arg<ffi::Buffer<ffi::DataType::C128>>()  // b
+        .Ret<ffi::Buffer<ffi::DataType::C128>>()  // x
+);
+
 ffi::Error free_numeric(
     const ffi::Buffer<ffi::DataType::U64> numeric,
     ffi::Result<ffi::Buffer<ffi::DataType::S32>> status) {
@@ -968,6 +1396,10 @@ PYBIND11_MODULE(klujax_cpp, m) {
           []() { return py::capsule((void*)&solve_with_symbol_f64_handler); });
     m.def("solve_with_symbol_c128",
           []() { return py::capsule((void*)&solve_with_symbol_c128_handler); });
+    m.def("tsolve_with_symbol_f64",
+          []() { return py::capsule((void*)&tsolve_with_symbol_f64_handler); });
+    m.def("tsolve_with_symbol_c128",
+          []() { return py::capsule((void*)&tsolve_with_symbol_c128_handler); });
     m.def("factor_f64",
           []() { return py::capsule((void*)&factor_f64_handler); });
     m.def("factor_c128",
@@ -976,6 +1408,10 @@ PYBIND11_MODULE(klujax_cpp, m) {
           []() { return py::capsule((void*)&solve_with_numeric_f64_handler); });
     m.def("solve_with_numeric_c128",
           []() { return py::capsule((void*)&solve_with_numeric_c128_handler); });
+    m.def("tsolve_with_numeric_f64",
+          []() { return py::capsule((void*)&tsolve_with_numeric_f64_handler); });
+    m.def("tsolve_with_numeric_c128",
+          []() { return py::capsule((void*)&tsolve_with_numeric_c128_handler); });
     m.def("free_numeric",
           []() { return py::capsule((void*)&free_numeric_handler); });
     m.def("analyze",
@@ -986,4 +1422,8 @@ PYBIND11_MODULE(klujax_cpp, m) {
           []() { return py::capsule((void*)&refactor_f64_handler); });
     m.def("refactor_c128",
           []() { return py::capsule((void*)&refactor_c128_handler); });
+    m.def("refactor_and_solve_f64",
+          []() { return py::capsule((void*)&refactor_and_solve_f64_handler); });
+    m.def("refactor_and_solve_c128",
+          []() { return py::capsule((void*)&refactor_and_solve_c128_handler); });
 }
