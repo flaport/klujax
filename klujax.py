@@ -1029,6 +1029,8 @@ mlir.register_lowering(free_symbolic_p, free_symbolic_low)
 @solve_c128.def_abstract_eval
 @solve_with_symbol_f64.def_abstract_eval
 @solve_with_symbol_c128.def_abstract_eval
+@tsolve_with_symbol_f64.def_abstract_eval
+@tsolve_with_symbol_c128.def_abstract_eval
 def general_abstract_eval(
     Ai: Array, Aj: Array, Ax: Array, b: Array, *args: Array
 ) -> ShapedArray:
@@ -1059,6 +1061,8 @@ def refactor_abstract_eval(Ai, Aj, Ax, symbolic, numeric):
 
 @solve_with_numeric_f64.def_abstract_eval
 @solve_with_numeric_c128.def_abstract_eval
+@tsolve_with_numeric_f64.def_abstract_eval
+@tsolve_with_numeric_c128.def_abstract_eval
 @tsolve_with_numeric_f64.def_abstract_eval
 @tsolve_with_numeric_c128.def_abstract_eval
 def solve_with_numeric_abstract_eval(symbolic, numeric, b):
