@@ -363,8 +363,8 @@ def _solve_with_symbol_jit(
 
     # Pass standardized arrays to the C++ extension
     x = prim.bind(
-        Ai,
-        Aj,
+        Ai.astype(jnp.int32),
+        Aj.astype(jnp.int32),
         Ax.astype(jnp.complex128 if is_complex else jnp.float64),
         b.astype(jnp.complex128 if is_complex else jnp.float64),
         sym_h.astype(jnp.uint64),
@@ -403,8 +403,8 @@ def _tsolve_with_symbol_jit(
     prim = tsolve_with_symbol_c128 if is_complex else tsolve_with_symbol_f64
 
     x = prim.bind(
-        Ai,
-        Aj,
+        Ai.astype(jnp.int32),
+        Aj.astype(jnp.int32),
         Ax.astype(jnp.complex128 if is_complex else jnp.float64),
         b.astype(jnp.complex128 if is_complex else jnp.float64),
         sym_h.astype(jnp.uint64),
@@ -445,7 +445,7 @@ def _factor_jit(Ai: Array, Aj: Array, Ax: Array, sym_h: Array) -> Array:
     dummy_b = jnp.zeros((1,), dtype=Ax.dtype)
     Ai, Aj, Ax, _, _ = validate_args(Ai, Aj, Ax, dummy_b)
     prim = factor_c128 if Ax.dtype in COMPLEX_DTYPES else factor_f64
-    return prim.bind(Ai, Aj, Ax, sym_h)
+    return prim.bind(Ai.astype(jnp.int32), Aj.astype(jnp.int32), Ax, sym_h)
 
 
 def factor(
@@ -473,7 +473,7 @@ def _refactor_jit(Ai: Array, Aj: Array, Ax: Array, sym_h: Array, num_h: Array) -
     dummy_b = jnp.zeros((1,), dtype=Ax.dtype)
     Ai, Aj, Ax, _, _ = validate_args(Ai, Aj, Ax, dummy_b)
     prim = refactor_c128 if Ax.dtype in COMPLEX_DTYPES else refactor_f64
-    return prim.bind(Ai, Aj, Ax, sym_h, num_h)
+    return prim.bind(Ai.astype(jnp.int32), Aj.astype(jnp.int32), Ax, sym_h, num_h)
 
 
 def refactor(
@@ -597,8 +597,8 @@ def _refactor_and_solve_jit(
     prim = refactor_and_solve_c128 if is_complex else refactor_and_solve_f64
 
     x, out_num = prim.bind(
-        Ai,
-        Aj,
+        Ai.astype(jnp.int32),
+        Aj.astype(jnp.int32),
         Ax.astype(jnp.complex128 if is_complex else jnp.float64),
         b.astype(jnp.complex128 if is_complex else jnp.float64),
         sym_h.astype(jnp.uint64),
@@ -1133,10 +1133,10 @@ def solve_value_and_jvp(
         raise ValueError(msg)  # noqa: TRY004
     dAx = dAx if not isinstance(dAx, ad.Zero) else jnp.zeros_like(Ax)
     db = db if not isinstance(db, ad.Zero) else jnp.zeros_like(b)
-    x = prim_solve.bind(Ai, Aj, Ax, b)
-    dA_x = prim_dot.bind(Ai, Aj, dAx, x)
-    invA_dA_x = prim_solve.bind(Ai, Aj, Ax, dA_x)
-    invA_db = prim_solve.bind(Ai, Aj, Ax, db)
+    x = prim_solve.bind(Ai.astype(jnp.int32), Aj.astype(jnp.int32), Ax, b)
+    dA_x = prim_dot.bind(Ai.astype(jnp.int32), Aj.astype(jnp.int32), dAx, x)
+    invA_dA_x = prim_solve.bind(Ai.astype(jnp.int32), Aj.astype(jnp.int32), Ax, dA_x)
+    invA_db = prim_solve.bind(Ai.astype(jnp.int32), Aj.astype(jnp.int32), Ax, db)
     return x, -invA_dA_x + invA_db
 
 
@@ -1152,9 +1152,9 @@ def dot_value_and_jvp(
         raise ValueError(msg)  # noqa: TRY004
     dAx = dAx if not isinstance(dAx, ad.Zero) else jnp.zeros_like(Ax)
     db = db if not isinstance(db, ad.Zero) else jnp.zeros_like(b)
-    x = prim.bind(Ai, Aj, Ax, b)
-    dA_b = prim.bind(Ai, Aj, dAx, b)
-    A_db = prim.bind(Ai, Aj, Ax, db)
+    x = prim.bind(Ai.astype(jnp.int32), Aj.astype(jnp.int32), Ax, b)
+    dA_b = prim.bind(Ai.astype(jnp.int32), Aj.astype(jnp.int32), dAx, b)
+    A_db = prim.bind(Ai.astype(jnp.int32), Aj.astype(jnp.int32), Ax, db)
     return x, dA_b + A_db
 
 
@@ -1366,7 +1366,9 @@ def general_vmap(
         shape = x.shape
         Ax = Ax.reshape(Ax.shape[0] * Ax.shape[1], Ax.shape[2])
         x = x.reshape(x.shape[0] * x.shape[1], x.shape[2], x.shape[3])
-        return prim.bind(Ai, Aj, Ax, x).reshape(*shape), 0
+        return prim.bind(Ai.astype(jnp.int32), Aj.astype(jnp.int32), Ax, x).reshape(
+            *shape
+        ), 0
     if aAx is not None:
         if Ax.ndim != 3 or x.ndim != 3:
             msg = (
@@ -1381,7 +1383,9 @@ def general_vmap(
         shape = x.shape
         Ax = Ax.reshape(Ax.shape[0] * Ax.shape[1], Ax.shape[2])
         x = x.reshape(x.shape[0] * x.shape[1], x.shape[2], x.shape[3])
-        return prim.bind(Ai, Aj, Ax, x).reshape(*shape), 0
+        return prim.bind(Ai.astype(jnp.int32), Aj.astype(jnp.int32), Ax, x).reshape(
+            *shape
+        ), 0
     if ax is not None:
         if Ax.ndim != 2 or x.ndim != 4:
             msg = (
@@ -1393,7 +1397,9 @@ def general_vmap(
         x = jnp.moveaxis(x, ax, 3)
         shape = x.shape
         x = x.reshape(x.shape[0], x.shape[1], x.shape[2] * x.shape[3])
-        return prim.bind(Ai, Aj, Ax, x).reshape(*shape), 3
+        return prim.bind(Ai.astype(jnp.int32), Aj.astype(jnp.int32), Ax, x).reshape(
+            *shape
+        ), 3
     msg = "vmap failed. Please select an axis to vectorize over."
     raise ValueError(msg)
 
@@ -1431,7 +1437,9 @@ def general_vmap_with_symbol(
         shape = x.shape
         Ax = Ax.reshape(Ax.shape[0] * Ax.shape[1], Ax.shape[2])
         x = x.reshape(x.shape[0] * x.shape[1], x.shape[2], x.shape[3])
-        return prim.bind(Ai, Aj, Ax, x, symbolic).reshape(*shape), 0
+        return prim.bind(
+            Ai.astype(jnp.int32), Aj.astype(jnp.int32), Ax, x, symbolic
+        ).reshape(*shape), 0
     if aAx is not None:
         if Ax.ndim != 3 or x.ndim != 3:
             msg = (
@@ -1446,7 +1454,9 @@ def general_vmap_with_symbol(
         shape = x.shape
         Ax = Ax.reshape(Ax.shape[0] * Ax.shape[1], Ax.shape[2])
         x = x.reshape(x.shape[0] * x.shape[1], x.shape[2], x.shape[3])
-        return prim.bind(Ai, Aj, Ax, x, symbolic).reshape(*shape), 0
+        return prim.bind(
+            Ai.astype(jnp.int32), Aj.astype(jnp.int32), Ax, x, symbolic
+        ).reshape(*shape), 0
     if ax is not None:
         if Ax.ndim != 2 or x.ndim != 4:
             msg = (
@@ -1458,7 +1468,9 @@ def general_vmap_with_symbol(
         x = jnp.moveaxis(x, ax, 3)
         shape = x.shape
         x = x.reshape(x.shape[0], x.shape[1], x.shape[2] * x.shape[3])
-        return prim.bind(Ai, Aj, Ax, x, symbolic).reshape(*shape), 3
+        return prim.bind(
+            Ai.astype(jnp.int32), Aj.astype(jnp.int32), Ax, x, symbolic
+        ).reshape(*shape), 3
     msg = "vmap failed. Please select an axis to vectorize over."
     raise ValueError(msg)
 
@@ -1549,7 +1561,9 @@ def general_vmap_factor(
         Ax = jnp.moveaxis(Ax, aAx, 0)
         batch, n_lhs, n_vals = Ax.shape
         Ax = Ax.reshape(batch * n_lhs, n_vals)
-        return prim.bind(Ai, Aj, Ax, symbolic).reshape(batch, n_lhs), 0
+        return prim.bind(
+            Ai.astype(jnp.int32), Aj.astype(jnp.int32), Ax, symbolic
+        ).reshape(batch, n_lhs), 0
 
     msg = "vmap failed. Please select an axis to vectorize over."
     raise ValueError(msg)
@@ -1587,7 +1601,9 @@ def general_vmap_refactor(
         batch, n_lhs, n_vals = Ax.shape
         Ax = Ax.reshape(batch * n_lhs, n_vals)
         numeric = numeric.reshape(batch * n_lhs)
-        return prim.bind(Ai, Aj, Ax, symbolic, numeric).reshape(batch, n_lhs), 0
+        return prim.bind(
+            Ai.astype(jnp.int32), Aj.astype(jnp.int32), Ax, symbolic, numeric
+        ).reshape(batch, n_lhs), 0
 
     if aAx is not None:
         if Ax.ndim != 3:
@@ -1598,7 +1614,9 @@ def general_vmap_refactor(
         numeric = jnp.broadcast_to(numeric[None], (batch, numeric.shape[0]))
         Ax = Ax.reshape(batch * n_lhs, n_vals)
         numeric = numeric.reshape(batch * n_lhs)
-        return prim.bind(Ai, Aj, Ax, symbolic, numeric).reshape(batch, n_lhs), 0
+        return prim.bind(
+            Ai.astype(jnp.int32), Aj.astype(jnp.int32), Ax, symbolic, numeric
+        ).reshape(batch, n_lhs), 0
 
     if anumeric is not None:
         if numeric.ndim != 2:
@@ -1611,7 +1629,9 @@ def general_vmap_refactor(
         Ax = jnp.broadcast_to(Ax[None], (batch, Ax.shape[0], Ax.shape[1]))
         Ax = Ax.reshape(batch * n_lhs, Ax.shape[2])
         numeric = numeric.reshape(batch * n_lhs)
-        return prim.bind(Ai, Aj, Ax, symbolic, numeric).reshape(batch, n_lhs), 0
+        return prim.bind(
+            Ai.astype(jnp.int32), Aj.astype(jnp.int32), Ax, symbolic, numeric
+        ).reshape(batch, n_lhs), 0
 
     msg = "vmap failed. Please select an axis to vectorize over."
     raise ValueError(msg)
@@ -1686,7 +1706,7 @@ def dot_transpose(
 
     if ad.is_undefined_primal(x):
         # replace x by ct
-        return Aj, Ai, Ax, prim.bind(Aj, Ai, Ax, ct)
+        return Aj, Ai, Ax, prim.bind(Aj.astype(jnp.int32), Ai.astype(jnp.int32), Ax, ct)
 
     if ad.is_undefined_primal(Ax):
         # ∂L/∂Ax[m,n] = Σₖ ct[m, Ai[n], k] · x[m, Aj[n], k]
@@ -1709,11 +1729,13 @@ def solve_transpose(
         raise ValueError(msg)
 
     if ad.is_undefined_primal(b):
-        b_bar = prim.bind(Aj, Ai, Ax, ct)
+        b_bar = prim.bind(Aj.astype(jnp.int32), Ai.astype(jnp.int32), Ax, ct)
         return Ai, Aj, Ax, b_bar
 
     if ad.is_undefined_primal(Ax):
-        Ax_bar = -(ct * prim.bind(Ai, Aj, Ax, b)).sum(-1)
+        Ax_bar = -(
+            ct * prim.bind(Ai.astype(jnp.int32), Aj.astype(jnp.int32), Ax, b)
+        ).sum(-1)
         return Ai, Aj, Ax_bar, b
 
     msg = "No undefined primals in transpose."
@@ -1932,11 +1954,18 @@ def solve_with_symbol_transpose(
 
     if ad.is_undefined_primal(b):
         # FAST PATH: Backpropagate through b using the reused handle!
-        b_bar = tsolve_prim.bind(Ai, Aj, Ax, ct, symbolic)
+        b_bar = tsolve_prim.bind(
+            Ai.astype(jnp.int32), Aj.astype(jnp.int32), Ax, ct, symbolic
+        )
         return Ai, Aj, Ax, b_bar, None
 
     if ad.is_undefined_primal(Ax):
-        Ax_bar = -(ct * tsolve_prim.bind(Ai, Aj, Ax, b, symbolic)).sum(-1)
+        Ax_bar = -(
+            ct
+            * tsolve_prim.bind(
+                Ai.astype(jnp.int32), Aj.astype(jnp.int32), Ax, b, symbolic
+            )
+        ).sum(-1)
         return Ai, Aj, Ax_bar, b, None
 
     msg = "No undefined primals in transpose."
