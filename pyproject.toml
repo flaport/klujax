@@ -11,7 +11,7 @@ dev = [
   "ruff>=0.9.7",
   "setuptools>=75.8.0",
   "tbump>=6.11.0",
-  "ty==0.0.26"
+  "ty==0.0.31"
 ]
 docs = [
   "mkdocs",
