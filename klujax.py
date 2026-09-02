@@ -5,6 +5,9 @@
 __version__ = "0.5.0"
 __author__ = "Floris Laporte"
 __all__ = [
+    "KLUHandleManager",
+    "KLUNumeric",
+    "KLUSymbolic",
     "analyze",
     "coalesce",
     "dot",
@@ -22,12 +25,10 @@ __all__ = [
 
 # Imports =============================================================================
 
-import contextlib
 import os
 import sys
-from collections.abc import Callable
-from types import TracebackType
-from typing import Any, Self
+import warnings
+from typing import Any
 
 import jax
 import jax.core
@@ -35,10 +36,24 @@ import jax.extend.core
 import jax.numpy as jnp
 import klujax_cpp  # ty: ignore[unresolved-import]
 import numpy as np
-from jax import lax
 from jax.core import ShapedArray
 from jax.interpreters import ad, batching, mlir
 from jaxtyping import Array
+
+KLUSymbolic = klujax_cpp.KLUSymbolic
+KLUNumeric = klujax_cpp.KLUNumeric
+KLUHandleManager = KLUSymbolic
+
+jax.tree_util.register_pytree_node(
+    klujax_cpp.KLUSymbolic,
+    lambda s: ([], s),
+    lambda s, _: s,
+)
+jax.tree_util.register_pytree_node(
+    klujax_cpp.KLUNumeric,
+    lambda s: ([], s),
+    lambda s, _: s,
+)
 
 # Config ==============================================================================
 
@@ -174,127 +189,49 @@ def coalesce(
     return Ai, Aj, Ax.reshape(*shape[:-1], -1)
 
 
-# Split Solve pointer management =====================================================
+# Handle helpers =====================================================================
 
 
-class KLUHandleManager:
-    """RAII wrapper for KLU handles. Handles are freed on __del__ or __exit__."""
-
-    def __init__(
-        self,
-        handle: Array,
-        free_callable: Callable,
-        owner: bool = True,  # noqa: FBT001, FBT002
-    ) -> None:
-        self.handle = handle
-        self.free_callable = free_callable
-        self._owner = owner
-        self._freed = False
-
-    def close(self) -> None:
-        """Release the C++ resource if this instance is the owner."""
-        # Safety check: If the interpreter is shutting down, 'jax' might be None.
-        # If so, we can simply return, as the OS will reclaim the memory momentarily.
-        if jax is None:
-            return
-
-        if self._freed or isinstance(self.handle, jax.core.Tracer):
-            return
-
-        if self._owner and self.free_callable:
-            with contextlib.suppress(Exception):
-                self.free_callable(self.handle)
-        self._freed = True
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
-        self.close()
-
-    def __del__(self) -> None:
-        if hasattr(self, "close"):
-            self.close()
+def _get_symbolic_handle(symbolic: Any) -> Array:  # noqa: ANN401
+    if isinstance(symbolic, klujax_cpp.KLUSymbolic):
+        return jnp.array(symbolic.raw, dtype=jnp.uint64)
+    return symbolic
 
 
-def _klu_flatten(obj: KLUHandleManager) -> tuple[tuple[()], tuple[Array, Callable]]:
-    # No leaves — handle and callable are both static aux data
-    return (), (obj.handle, obj.free_callable)
+def _get_numeric_handle(numeric: Any) -> Array:  # noqa: ANN401
+    if isinstance(numeric, klujax_cpp.KLUNumeric):
+        return jnp.array(numeric.as_list(), dtype=jnp.uint64)
+    return numeric
 
 
-def _klu_unflatten(
-    aux: tuple[Array, Callable], children: tuple[()]
-) -> KLUHandleManager:
-    handle, free_callable = aux
-    return KLUHandleManager(handle, free_callable=free_callable, owner=False)
-
-
-jax.tree_util.register_pytree_node(KLUHandleManager, _klu_flatten, _klu_unflatten)
-
-
-def free_symbolic(symbolic: KLUHandleManager | Array, dependency: Any = None) -> Array:  # noqa: ANN401
-    """Free the KLU symbolic analysis object.
-
-    Args:
-        symbolic: [KLUHandleManager|Array]: the symbolic analysis object or handle
-        dependency: [Any]: optional dependency to enforce ordering in JIT
-
-    Returns:
-        result: [int32]: 0 if successful
-
-    """
-    if isinstance(symbolic, KLUHandleManager):
+def free_symbolic(symbolic: Any, dependency: Any = None) -> Array:  # noqa: ANN401
+    """Free a KLU handle (deprecated — handles are freed automatically)."""
+    warnings.warn(
+        "free_symbolic is deprecated; handles are freed automatically",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    if hasattr(symbolic, "close"):
         symbolic.close()
-        return jnp.array(0, dtype=jnp.int32)
-
-    handle = getattr(symbolic, "handle", symbolic)
-    if isinstance(handle, jax.core.Tracer) and dependency is not None:
-        token = jax.tree_util.tree_leaves(dependency)[0]
-        return lax.cond(
-            jnp.array(True),  # noqa: FBT003
-            lambda ops: free_symbolic_p.bind(ops[0]),
-            lambda _: jnp.array(0, dtype=jnp.int32),
-            operand=(handle, token),
-        )
-    return free_symbolic_p.bind(handle)
+    return jnp.array(0, dtype=jnp.int32)
 
 
-def free_numeric(numeric: KLUHandleManager | Array, dependency: Any = None) -> Array:  # noqa: ANN401
-    """Free the KLU numeric factorization object.
-
-    Args:
-        numeric: [KLUHandleManager|Array]: the numeric factorization object or handle
-        dependency: [Any]: optional dependency to enforce ordering in JIT
-
-    Returns:
-        result: [int32]: 0 if successful
-
-    """
-    if isinstance(numeric, KLUHandleManager):
+def free_numeric(numeric: Any, dependency: Any = None) -> Array:  # noqa: ANN401
+    """Free a KLU handle (deprecated — handles are freed automatically)."""
+    warnings.warn(
+        "free_numeric is deprecated; handles are freed automatically",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    if hasattr(numeric, "close"):
         numeric.close()
-        return jnp.array(0, dtype=jnp.int32)
-
-    handle = getattr(numeric, "handle", numeric)
-    if isinstance(handle, jax.core.Tracer) and dependency is not None:
-        token = jax.tree_util.tree_leaves(dependency)[0]
-        return lax.cond(
-            jnp.array(True),  # noqa: FBT003
-            lambda ops: free_numeric_p.bind(ops[0]),
-            lambda _: jnp.array(0, dtype=jnp.int32),
-            operand=(handle, token),
-        )
-    return free_numeric_p.bind(handle)
+    return jnp.array(0, dtype=jnp.int32)
 
 
 # Split Solve routines =============================================================
 
 
-def analyze(Ai: Array, Aj: Array, n_col: int) -> KLUHandleManager:
+def analyze(Ai: Array, Aj: Array, n_col: int) -> klujax_cpp.KLUSymbolic:
     """Analyze the sparsity pattern of a matrix A.
 
     Args:
@@ -303,13 +240,13 @@ def analyze(Ai: Array, Aj: Array, n_col: int) -> KLUHandleManager:
         n_col: [int]: the number of columns in the sparse matrix A
 
     Returns:
-        symbolic: [KLUHandleManager]: the symbolic analysis object
+        symbolic: [KLUSymbolic]: the symbolic analysis object (freed automatically)
 
     """
     Ai = jnp.asarray(Ai, dtype=jnp.int32)
     Aj = jnp.asarray(Aj, dtype=jnp.int32)
     raw_symbol = analyze_p.bind(Ai, Aj, jnp.int32(n_col))
-    return KLUHandleManager(raw_symbol, free_symbolic, owner=True)
+    return klujax_cpp.KLUSymbolic(int(raw_symbol))
 
 
 def validate_numeric_solve(
@@ -374,7 +311,7 @@ def _solve_with_symbol_jit(
 
 
 def solve_with_symbol(
-    Ai: Array, Aj: Array, Ax: Array, b: Array, symbolic: KLUHandleManager | Array
+    Ai: Array, Aj: Array, Ax: Array, b: Array, symbolic: klujax_cpp.KLUSymbolic | Array
 ) -> Array:
     """Solve Ax=b using a pre-computed symbolic analysis.
 
@@ -383,13 +320,13 @@ def solve_with_symbol(
         Aj: [n_nz; int32]: the column indices of the sparse matrix A
         Ax: [n_lhs? x n_nz; float64|complex128]: the values of the sparse matrix A
         b:  [n_lhs? x n_col x n_rhs?; float64|complex128]: the target vector
-        symbolic: [KLUHandleManager|Array]: the symbolic analysis object or handle
+        symbolic: [KLUSymbolic|Array]: the symbolic analysis object or handle
 
     Returns:
         x: the result (x≈A^-1b)
 
     """
-    handle = getattr(symbolic, "handle", symbolic)
+    handle = _get_symbolic_handle(symbolic)
     return _solve_with_symbol_jit(Ai, Aj, Ax, b, handle)
 
 
@@ -414,7 +351,7 @@ def _tsolve_with_symbol_jit(
 
 
 def tsolve_with_symbol(
-    Ai: Array, Aj: Array, Ax: Array, b: Array, symbolic: KLUHandleManager | Array
+    Ai: Array, Aj: Array, Ax: Array, b: Array, symbolic: klujax_cpp.KLUSymbolic | Array
 ) -> Array:
     """Solve A^T x=b (transpose solve) using a pre-computed symbolic analysis.
 
@@ -430,13 +367,13 @@ def tsolve_with_symbol(
         Aj: [n_nz; int32]: the column indices of the sparse matrix A
         Ax: [n_lhs? x n_nz; float64|complex128]: the values of the sparse matrix A
         b:  [n_lhs? x n_col x n_rhs?; float64|complex128]: the target vector
-        symbolic: [KLUHandleManager|Array]: the symbolic analysis object or handle
+        symbolic: [KLUSymbolic|Array]: the symbolic analysis object or handle
 
     Returns:
         x: the result (x≈(A^T)^-1 b)
 
     """
-    handle = getattr(symbolic, "handle", symbolic)
+    handle = _get_symbolic_handle(symbolic)
     return _tsolve_with_symbol_jit(Ai, Aj, Ax, b, handle)
 
 
@@ -449,23 +386,26 @@ def _factor_jit(Ai: Array, Aj: Array, Ax: Array, sym_h: Array) -> Array:
 
 
 def factor(
-    Ai: Array, Aj: Array, Ax: Array, symbolic: KLUHandleManager | Array
-) -> KLUHandleManager:
+    Ai: Array, Aj: Array, Ax: Array, symbolic: klujax_cpp.KLUSymbolic | Array
+) -> klujax_cpp.KLUNumeric:
     """Compute the numeric factorization of a matrix A given its symbolic analysis.
 
     Args:
         Ai: [n_nz; int32]: the row indices of the sparse matrix A
         Aj: [n_nz; int32]: the column indices of the sparse matrix A
         Ax: [n_lhs? x n_nz; float64|complex128]: the values of the sparse matrix A
-        symbolic: [KLUHandleManager|Array]: the symbolic analysis object or handle
+        symbolic: [KLUSymbolic|Array]: the symbolic analysis object or handle
 
     Returns:
-        numeric: [KLUHandleManager]: the numeric factorization object
+        numeric: [KLUNumeric]: the numeric factorization object (freed automatically).
+            Inside vmap, returns a raw array — RAII cannot wrap traced values.
 
     """
-    sym_h = getattr(symbolic, "handle", symbolic)
+    sym_h = _get_symbolic_handle(symbolic)
     raw_numeric = _factor_jit(Ai, Aj, Ax, sym_h)
-    return KLUHandleManager(raw_numeric, free_numeric, owner=True)
+    if isinstance(raw_numeric, jax.core.Tracer):
+        return raw_numeric
+    return klujax_cpp.KLUNumeric(list(np.asarray(raw_numeric).flat))
 
 
 @jax.jit
@@ -480,36 +420,30 @@ def refactor(
     Ai: Array,
     Aj: Array,
     Ax: Array,
-    numeric: KLUHandleManager | Array,
-    symbolic: KLUHandleManager | Array,
-) -> KLUHandleManager:
+    numeric: klujax_cpp.KLUNumeric | Array,
+    symbolic: klujax_cpp.KLUSymbolic | Array,
+) -> klujax_cpp.KLUNumeric | Array:
     """Re-factorize matrix A numerically, reusing the symbolic analysis.
 
     Use when the sparsity pattern is unchanged but values have changed.
     Modifies the numeric factorization in-place. Faster than calling factor().
 
-    Returns a KLUHandleManager holding the same underlying pointer as the input
-    numeric handle. The returned handle must be threaded into subsequent
-    solve_with_numeric calls so that XLA/JAX sees the dependency edge:
-    factor → refactor → solve.
-
     Args:
         Ai: [n_nz; int32]: the row indices of the sparse matrix A
         Aj: [n_nz; int32]: the column indices of the sparse matrix A
         Ax: [n_lhs? x n_nz; float64|complex128]: the values of the sparse matrix A
-        numeric: [KLUHandleManager|Array]: existing numeric factorization
+        numeric: [KLUNumeric|Array]: existing numeric factorization
             (modified in-place)
-        symbolic: [KLUHandleManager|Array]: the symbolic analysis object or handle
+        symbolic: [KLUSymbolic|Array]: the symbolic analysis object or handle
 
     Returns:
-        numeric: [KLUHandleManager]: the updated numeric handle
-            (same pointer, for XLA dep tracking)
+        numeric: the same handle, updated in-place
 
     """
-    num_h = getattr(numeric, "handle", numeric)
-    sym_h = getattr(symbolic, "handle", symbolic)
-    raw_handle = _refactor_jit(Ai, Aj, Ax, sym_h, num_h)
-    return KLUHandleManager(raw_handle, free_numeric, owner=False)
+    num_h = _get_numeric_handle(numeric)
+    sym_h = _get_symbolic_handle(symbolic)
+    _refactor_jit(Ai, Aj, Ax, sym_h, num_h)
+    return numeric
 
 
 @jax.jit
@@ -521,29 +455,24 @@ def _solve_with_numeric_jit(num_h: Array, b: Array, sym_h: Array) -> Array:
 
 
 def solve_with_numeric(
-    numeric: KLUHandleManager | Array,
+    numeric: klujax_cpp.KLUNumeric | Array,
     b: Array,
-    symbolic: KLUHandleManager | Array,
+    symbolic: klujax_cpp.KLUSymbolic | Array,
 ) -> Array:
     """Solve Ax=b using a pre-computed numeric factorization.
 
     Args:
-        numeric: [KLUHandleManager|Array]: the numeric factorization object or handle
+        numeric: [KLUNumeric|Array]: the numeric factorization object or handle
         b:  [n_lhs? x n_col x n_rhs?; float64|complex128]: the target vector
-        symbolic: [KLUHandleManager|Array]: the symbolic analysis object or handle
+        symbolic: [KLUSymbolic|Array]: the symbolic analysis object or handle
 
     Returns:
         x: the result (x≈A^-1b)
 
     """
-    num_h = getattr(numeric, "handle", numeric)
-    sym_h = getattr(symbolic, "handle", symbolic)
-    result = _solve_with_numeric_jit(num_h, b, sym_h)
-
-    # Auto-cleanup if the handle was created inside a JIT block.
-    if isinstance(num_h, jax.core.Tracer) and isinstance(numeric, KLUHandleManager):
-        free_numeric(numeric, dependency=result)
-    return result
+    num_h = _get_numeric_handle(numeric)
+    sym_h = _get_symbolic_handle(symbolic)
+    return _solve_with_numeric_jit(num_h, b, sym_h)
 
 
 @jax.jit
@@ -557,9 +486,9 @@ def _tsolve_with_numeric_jit(num_h: Array, b: Array, sym_h: Array) -> Array:
 
 
 def tsolve_with_numeric(
-    numeric: KLUHandleManager | Array,
+    numeric: klujax_cpp.KLUNumeric | Array,
     b: Array,
-    symbolic: KLUHandleManager | Array,
+    symbolic: klujax_cpp.KLUSymbolic | Array,
 ) -> Array:
     """Solve A^T x=b (transpose solve) using a pre-computed numeric factorization.
 
@@ -569,21 +498,17 @@ def tsolve_with_numeric(
     For complex matrices, this solves A^T x = b (plain transpose, not conjugate).
 
     Args:
-        numeric: [KLUHandleManager|Array]: the numeric factorization object or handle
+        numeric: [KLUNumeric|Array]: the numeric factorization object or handle
         b:  [n_lhs? x n_col x n_rhs?; float64|complex128]: the target vector
-        symbolic: [KLUHandleManager|Array]: the symbolic analysis object or handle
+        symbolic: [KLUSymbolic|Array]: the symbolic analysis object or handle
 
     Returns:
         x: the result (x≈(A^T)^-1 b)
 
     """
-    num_h = getattr(numeric, "handle", numeric)
-    sym_h = getattr(symbolic, "handle", symbolic)
-    result = _tsolve_with_numeric_jit(num_h, b, sym_h)
-
-    if isinstance(num_h, jax.core.Tracer) and isinstance(numeric, KLUHandleManager):
-        free_numeric(numeric, dependency=result)
-    return result
+    num_h = _get_numeric_handle(numeric)
+    sym_h = _get_symbolic_handle(symbolic)
+    return _tsolve_with_numeric_jit(num_h, b, sym_h)
 
 
 @jax.jit
@@ -614,9 +539,9 @@ def refactor_and_solve(
     Aj: Array,
     Ax: Array,
     b: Array,
-    numeric: KLUHandleManager | Array,
-    symbolic: KLUHandleManager | Array,
-) -> tuple[Array, KLUHandleManager]:
+    numeric: klujax_cpp.KLUNumeric | Array,
+    symbolic: klujax_cpp.KLUSymbolic | Array,
+) -> tuple[Array, klujax_cpp.KLUNumeric | Array]:
     """Fused in-place refactorization followed by triangular solve.
 
     Equivalent to calling refactor() then solve_with_numeric(), but executes as a
@@ -624,28 +549,24 @@ def refactor_and_solve(
     and saves a JAX dispatch round-trip, which matters in tight iteration loops.
 
     The numeric factorization is modified in-place (same behaviour as refactor()).
-    The returned KLUHandleManager wraps the same underlying pointer as the input
-    numeric handle with owner=False — the original owner is still responsible for
-    calling free_numeric.
 
     Args:
         Ai: [n_nz; int32]: the row indices of the sparse matrix A
         Aj: [n_nz; int32]: the column indices of the sparse matrix A
         Ax: [n_lhs? x n_nz; float64|complex128]: the values of the sparse matrix A
         b:  [n_lhs? x n_col x n_rhs?; float64|complex128]: the right-hand side
-        numeric: [KLUHandleManager|Array]: existing numeric factorization
-        (modified in-place)
-        symbolic: [KLUHandleManager|Array]: the symbolic analysis object or handle
+        numeric: [KLUNumeric|Array]: existing numeric factorization
+            (modified in-place)
+        symbolic: [KLUSymbolic|Array]: the symbolic analysis object or handle
 
     Returns:
-        (x, numeric): solution array and the updated numeric handle
-                      (same pointer as input, owner=False, for XLA dep tracking)
+        (x, numeric): solution array and the same numeric handle
 
     """
-    num_h = getattr(numeric, "handle", numeric)
-    sym_h = getattr(symbolic, "handle", symbolic)
-    x, raw_numeric = _refactor_and_solve_jit(Ai, Aj, Ax, b, sym_h, num_h)
-    return x, KLUHandleManager(raw_numeric, free_numeric, owner=False)
+    num_h = _get_numeric_handle(numeric)
+    sym_h = _get_symbolic_handle(symbolic)
+    x, _ = _refactor_and_solve_jit(Ai, Aj, Ax, b, sym_h, num_h)
+    return x, numeric
 
 
 # Primitives ==========================================================================
@@ -659,14 +580,12 @@ solve_with_symbol_f64 = jax.extend.core.Primitive("solve_with_symbol_f64")
 solve_with_symbol_c128 = jax.extend.core.Primitive("solve_with_symbol_c128")
 tsolve_with_symbol_f64 = jax.extend.core.Primitive("tsolve_with_symbol_f64")
 tsolve_with_symbol_c128 = jax.extend.core.Primitive("tsolve_with_symbol_c128")
-free_symbolic_p = jax.extend.core.Primitive("free_symbolic")
 factor_f64 = jax.extend.core.Primitive("factor_f64")
 factor_c128 = jax.extend.core.Primitive("factor_c128")
 solve_with_numeric_f64 = jax.extend.core.Primitive("solve_with_numeric_f64")
 solve_with_numeric_c128 = jax.extend.core.Primitive("solve_with_numeric_c128")
 tsolve_with_numeric_f64 = jax.extend.core.Primitive("tsolve_with_numeric_f64")
 tsolve_with_numeric_c128 = jax.extend.core.Primitive("tsolve_with_numeric_c128")
-free_numeric_p = jax.extend.core.Primitive("free_numeric")
 refactor_f64 = jax.extend.core.Primitive("refactor_f64")
 refactor_c128 = jax.extend.core.Primitive("refactor_c128")
 refactor_and_solve_f64 = jax.extend.core.Primitive("refactor_and_solve_f64")
@@ -920,36 +839,6 @@ tsolve_with_symbol_c128_low = mlir.lower_fun(
 )
 mlir.register_lowering(tsolve_with_symbol_c128, tsolve_with_symbol_c128_low)
 
-jax.ffi.register_ffi_target(
-    "free_symbolic",
-    klujax_cpp.free_symbolic(),
-    platform="cpu",
-)
-
-jax.ffi.register_ffi_target(
-    "free_numeric",
-    klujax_cpp.free_numeric(),
-    platform="cpu",
-)
-
-
-@free_numeric_p.def_impl
-def free_numeric_impl(numeric):
-    call = jax.ffi.ffi_call("free_numeric", jax.ShapeDtypeStruct((), jnp.int32))
-    return call(numeric)
-
-
-@free_symbolic_p.def_impl
-def free_symbolic_impl(symbolic):
-    call = jax.ffi.ffi_call("free_symbolic", jax.ShapeDtypeStruct((), jnp.int32))
-    return call(symbolic)
-
-
-@free_numeric_p.def_abstract_eval
-def free_numeric_abstract_eval(numeric):
-    return ShapedArray((), jnp.int32)
-
-
 jax.ffi.register_ffi_target("factor_f64", klujax_cpp.factor_f64(), platform="cpu")
 factor_f64_low = mlir.lower_fun(factor_f64_impl, multiple_results=False)
 mlir.register_lowering(factor_f64, factor_f64_low)
@@ -1014,12 +903,6 @@ refactor_and_solve_c128_low = mlir.lower_fun(
 )
 mlir.register_lowering(refactor_and_solve_c128, refactor_and_solve_c128_low)
 
-free_numeric_low = mlir.lower_fun(free_numeric_impl, multiple_results=False)
-mlir.register_lowering(free_numeric_p, free_numeric_low)
-
-free_symbolic_low = mlir.lower_fun(free_symbolic_impl, multiple_results=False)
-mlir.register_lowering(free_symbolic_p, free_symbolic_low)
-
 # Abstract Evals ======================================================================
 
 
@@ -1040,11 +923,6 @@ def general_abstract_eval(
 @analyze_p.def_abstract_eval
 def analyze_abstract_eval(Ai: Array, Aj: Array, n_col: Array) -> ShapedArray:
     return ShapedArray((), jnp.uint64)
-
-
-@free_symbolic_p.def_abstract_eval
-def free_symbolic_abstract_eval(symbolic: Array) -> None:
-    return None
 
 
 @factor_f64.def_abstract_eval

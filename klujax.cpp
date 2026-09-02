@@ -6,9 +6,11 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <vector>
 
 #include "klu.h"
 #include "pybind11/pybind11.h"
+#include "pybind11/stl.h"
 #include "xla/ffi/api/ffi.h"
 
 namespace py = pybind11;
@@ -1328,6 +1330,60 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::DataType::S32>>()  // status
 );
 
+struct KLUSymbolic {
+    klu_symbolic* ptr = nullptr;
+    klu_common common{};
+    bool closed = false;
+
+    KLUSymbolic(uint64_t raw) : ptr(reinterpret_cast<klu_symbolic*>(raw)) {
+        klu_defaults(&common);
+    }
+    KLUSymbolic(const KLUSymbolic&) = delete;
+    KLUSymbolic& operator=(const KLUSymbolic&) = delete;
+
+    uint64_t raw() const { return reinterpret_cast<uint64_t>(ptr); }
+
+    void close() {
+        if (!closed && ptr) {
+            klu_free_symbolic(&ptr, &common);
+            closed = true;
+        }
+    }
+
+    ~KLUSymbolic() { close(); }
+};
+
+struct KLUNumeric {
+    std::vector<uint64_t> ptrs;
+    klu_common common{};
+    bool closed = false;
+
+    KLUNumeric(std::vector<uint64_t> data) : ptrs(std::move(data)) {
+        klu_defaults(&common);
+    }
+    KLUNumeric(const KLUNumeric&) = delete;
+    KLUNumeric& operator=(const KLUNumeric&) = delete;
+
+    size_t size() const { return ptrs.size(); }
+
+    std::vector<uint64_t> as_list() const { return ptrs; }
+
+    void close() {
+        if (!closed) {
+            for (auto addr : ptrs) {
+                if (addr != 0) {
+                    auto* num = reinterpret_cast<klu_numeric*>(addr);
+                    klu_free_numeric(&num, &common);
+                }
+            }
+            ptrs.clear();
+            closed = true;
+        }
+    }
+
+    ~KLUNumeric() { close(); }
+};
+
 ffi::Error analyze(
     const ffi::Buffer<ffi::DataType::S32> Ai,
     const ffi::Buffer<ffi::DataType::S32> Aj,
@@ -1426,4 +1482,20 @@ PYBIND11_MODULE(klujax_cpp, m) {
           []() { return py::capsule((void*)&refactor_and_solve_f64_handler); });
     m.def("refactor_and_solve_c128",
           []() { return py::capsule((void*)&refactor_and_solve_c128_handler); });
+
+    py::class_<KLUSymbolic>(m, "KLUSymbolic")
+        .def(py::init<uint64_t>())
+        .def_property_readonly("raw", &KLUSymbolic::raw)
+        .def_property_readonly("handle", [](KLUSymbolic& s) -> KLUSymbolic& { return s; }, py::return_value_policy::reference)
+        .def("close", &KLUSymbolic::close)
+        .def("__enter__", [](KLUSymbolic& s) -> KLUSymbolic& { return s; }, py::return_value_policy::reference)
+        .def("__exit__", [](KLUSymbolic& s, py::args) { s.close(); });
+
+    py::class_<KLUNumeric>(m, "KLUNumeric")
+        .def(py::init<std::vector<uint64_t>>())
+        .def_property_readonly("size", &KLUNumeric::size)
+        .def("as_list", &KLUNumeric::as_list)
+        .def("close", &KLUNumeric::close)
+        .def("__enter__", [](KLUNumeric& s) -> KLUNumeric& { return s; }, py::return_value_policy::reference)
+        .def("__exit__", [](KLUNumeric& s, py::args) { s.close(); });
 }
