@@ -1,5 +1,8 @@
+import gc
+import os
 import sys
 from functools import wraps
+from pathlib import Path
 
 import jax
 import jax.core
@@ -174,27 +177,10 @@ def test_4d_vmap(dtype, op_sparse):
 def test_analyze():
     Ai, Aj, Ax, b = _get_rand_arrs_1d(15, (n_col := 5), dtype=np.float64)
 
-    # 1. Test Eager Analysis
     symbolic = klujax.analyze(Ai, Aj, n_col)
-    assert isinstance(symbolic, klujax.KLUHandleManager)
-    assert symbolic._owner is True
-    assert symbolic.handle.dtype == jnp.uint64
+    assert isinstance(symbolic, klujax.KLUSymbolic)
 
-    # Manually free to be clean before next step
-    klujax.free_symbolic(symbolic)
-    assert symbolic._freed is True
-
-    @jax.jit
-    def jit_analyze_and_solve(Ai, Aj, Ax, b):
-        # Create handle inside JIT
-        sym = klujax.analyze(Ai, Aj, 5)  # Inside JIT, this is a Tracer
-
-        x = klujax.solve_with_symbol(Ai, Aj, Ax, b, sym)
-
-        klujax.free_symbolic(sym, dependency=x)
-        return x
-
-    x = jit_analyze_and_solve(Ai, Aj, Ax, b)
+    x = klujax.solve_with_symbol(Ai, Aj, Ax, b, symbolic)
     assert x.shape == (n_col,)
 
 
@@ -214,8 +200,6 @@ def test_solve_with_symbol(dtype):
     x_sp_jit = jax.jit(klujax.solve_with_symbol)(Ai, Aj, Ax, b, symbolic)
     _log_and_test_equality(x, x_sp_jit)
 
-    klujax.free_symbolic(symbolic)
-
 
 @log_test_name
 @parametrize_dtypes
@@ -231,8 +215,6 @@ def test_solve_with_symbol_batched(dtype):
     x = op_dense(A, b)
     _log_and_test_equality(x, x_sp)
 
-    klujax.free_symbolic(symbolic)
-
 
 @log_test_name
 @parametrize_dtypes
@@ -246,9 +228,6 @@ def test_solve_with_numeric(dtype):
     A = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax)
     x = jsp.linalg.solve(A, b)
     _log_and_test_equality(x, x_sp)
-
-    klujax.free_numeric(numeric)
-    klujax.free_symbolic(symbolic)
 
 
 @log_test_name
@@ -265,9 +244,6 @@ def test_solve_with_numeric_batched(dtype):
     A = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax)
     x = op_dense(A, b)
     _log_and_test_equality(x, x_sp)
-
-    klujax.free_numeric(numeric)
-    klujax.free_symbolic(symbolic)
 
 
 @log_test_name
@@ -292,8 +268,6 @@ def test_solve_with_numeric_vmap_1d_b(dtype):
     A_batch = jnp.zeros((batch, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax_batch)
     x = jax.vmap(lambda A: jsp.linalg.solve(A, b))(A_batch)
     _log_and_test_equality(x, x_sp)
-
-    klujax.free_symbolic(symbolic)
 
 
 def _get_rand_arrs_1d(n_nz, n_col, *, dtype, seed=33):
@@ -407,15 +381,13 @@ def test_refactor(dtype):
     num = klujax.factor(Ai, Aj, Ax, sym)
 
     num2 = klujax.refactor(Ai, Aj, Ax2, num, sym)
-    assert isinstance(num2, klujax.KLUHandleManager)
+    assert isinstance(num2, klujax.KLUNumeric)
+    assert num2 is num
 
     x_sp = klujax.solve_with_numeric(num2, b2, sym)
     A2 = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax2)
     x = jsp.linalg.solve(A2, b2)
     _log_and_test_equality(x, x_sp)
-
-    klujax.free_numeric(num)
-    klujax.free_symbolic(sym)
 
 
 @log_test_name
@@ -429,16 +401,14 @@ def test_refactor_batched(dtype):
     num = klujax.factor(Ai, Aj, Ax, sym)
 
     num2 = klujax.refactor(Ai, Aj, Ax2, num, sym)
-    assert isinstance(num2, klujax.KLUHandleManager)
+    assert isinstance(num2, klujax.KLUNumeric)
+    assert num2 is num
 
     x_sp = klujax.solve_with_numeric(num2, b2, sym)
     op_dense = jax.vmap(jsp.linalg.solve, (0, 0), 0)
     A2 = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax2)
     x = op_dense(A2, b2)
     _log_and_test_equality(x, x_sp)
-
-    klujax.free_numeric(num)
-    klujax.free_symbolic(sym)
 
 
 @log_test_name
@@ -454,7 +424,7 @@ def test_refactor_vmap(dtype):
 
     sym = klujax.analyze(Ai, Aj, n_col)
     num = klujax.factor(Ai, Aj, Ax, sym)
-    num2 = klujax.refactor(Ai, Aj, Ax2, num, sym)
+    klujax.refactor(Ai, Aj, Ax2, num, sym)
 
     # vmap solve_with_symbol over n_rhs axis (same pattern as test_3d_vmap)
     x_sp = jax.vmap(klujax.solve_with_symbol, (None, None, None, -1, None), -1)(
@@ -464,9 +434,6 @@ def test_refactor_vmap(dtype):
     A2 = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax2)
     x = jax.vmap(jax.vmap(jsp.linalg.solve, (0, 0), 0), (None, -1), -1)(A2, b)
     _log_and_test_equality(x, x_sp)
-
-    klujax.free_numeric(num2)
-    klujax.free_symbolic(sym)
 
 
 @log_test_name
@@ -487,9 +454,6 @@ def test_refactor_pmap(dtype):
     A2 = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax2)
     x = jax.vmap(lambda b: jsp.linalg.solve(A2, b))(B)
     _log_and_test_equality(x, x_sp)
-
-    klujax.free_numeric(num2)
-    klujax.free_symbolic(sym)
 
 
 @log_test_name
@@ -522,9 +486,6 @@ def test_refactor_grad(dtype):
         holomorphic=holomorphic,
     )(Ax2)
     _log_and_test_equality(jac_sp, jac_dense)
-
-    klujax.free_numeric(num2)
-    klujax.free_symbolic(sym)
 
 
 def test_solve_with_symbol_jvp():
@@ -567,8 +528,6 @@ def test_tsolve_with_symbol(dtype):
     x_sp_jit = jax.jit(klujax.tsolve_with_symbol)(Ai, Aj, Ax, b, symbolic)
     _log_and_test_equality(x, x_sp_jit)
 
-    klujax.free_symbolic(symbolic)
-
 
 @log_test_name
 @parametrize_dtypes
@@ -585,8 +544,6 @@ def test_tsolve_with_symbol_batched(dtype):
     x = op_dense(A_T, b)
     _log_and_test_equality(x, x_sp)
 
-    klujax.free_symbolic(symbolic)
-
 
 @log_test_name
 @parametrize_dtypes
@@ -600,9 +557,6 @@ def test_tsolve_with_numeric(dtype):
     A = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax)
     x = jsp.linalg.solve(A.T, b)
     _log_and_test_equality(x, x_sp)
-
-    klujax.free_numeric(numeric)
-    klujax.free_symbolic(symbolic)
 
 
 @log_test_name
@@ -621,9 +575,6 @@ def test_tsolve_with_numeric_batched(dtype):
     x = op_dense(A_T, b)
     _log_and_test_equality(x, x_sp)
 
-    klujax.free_numeric(numeric)
-    klujax.free_symbolic(symbolic)
-
 
 @log_test_name
 @parametrize_dtypes
@@ -638,16 +589,12 @@ def test_refactor_and_solve(dtype):
     # Verifying specific API order: Ai, Aj, Ax, b, numeric, symbolic
     x_sp, num2 = klujax.refactor_and_solve(Ai, Aj, Ax2, b2, num, sym)
 
-    assert isinstance(num2, klujax.KLUHandleManager)
-    assert num2._owner is False
+    assert isinstance(num2, klujax.KLUNumeric)
+    assert num2 is num
 
     A2 = jnp.zeros((n_col, n_col), dtype=dtype).at[Ai, Aj].add(Ax2)
     x = jsp.linalg.solve(A2, b2)
     _log_and_test_equality(x, x_sp)
-
-    # Original handle must be manually freed because num2 is owner=False
-    klujax.free_numeric(num)
-    klujax.free_symbolic(sym)
 
 
 @log_test_name
@@ -663,62 +610,108 @@ def test_refactor_and_solve_batched(dtype):
     # Verifying specific API order: Ai, Aj, Ax, b, numeric, symbolic
     x_sp, num2 = klujax.refactor_and_solve(Ai, Aj, Ax2, b2, num, sym)
 
-    assert isinstance(num2, klujax.KLUHandleManager)
-    assert num2._owner is False
+    assert isinstance(num2, klujax.KLUNumeric)
+    assert num2 is num
 
     op_dense = jax.vmap(jsp.linalg.solve, (0, 0), 0)
     A2 = jnp.zeros((n_lhs, n_col, n_col), dtype=dtype).at[:, Ai, Aj].add(Ax2)
     x = op_dense(A2, b2)
     _log_and_test_equality(x, x_sp)
 
-    klujax.free_numeric(num)
-    klujax.free_symbolic(sym)
+
+# RAII handle tests
 
 
-# KLUHandleManager testing
+def test_context_manager_symbolic():
+    Ai, Aj, Ax, b = _get_rand_arrs_1d(15, (n_col := 5), dtype=np.float64)
+    with klujax.analyze(Ai, Aj, n_col) as sym:
+        assert isinstance(sym, klujax.KLUSymbolic)
+        x = klujax.solve_with_symbol(Ai, Aj, Ax, b, sym)
+        assert x.shape == (n_col,)
 
 
-def use_handle(manager, x):
-    """Simulates any function requiring a concrete handle (e.g. a C pointer)."""
-    assert not isinstance(manager.handle, jax.core.Tracer), (
-        "Handle was traced! Got a Tracer instead of a concrete value."
+def test_context_manager_numeric():
+    Ai, Aj, Ax, b = _get_rand_arrs_1d(15, (n_col := 5), dtype=np.float64)
+    sym = klujax.analyze(Ai, Aj, n_col)
+    num = klujax.factor(Ai, Aj, Ax, sym)
+    with num:
+        x = klujax.solve_with_numeric(num, b, sym)
+        assert x.shape == (n_col,)
+
+
+def test_double_close_symbolic():
+    Ai, Aj, _, _ = _get_rand_arrs_1d(15, 5, dtype=np.float64)
+    sym = klujax.analyze(Ai, Aj, 5)
+    sym.close()
+    sym.close()
+
+
+def test_double_close_numeric():
+    Ai, Aj, Ax, _ = _get_rand_arrs_1d(15, 5, dtype=np.float64)
+    sym = klujax.analyze(Ai, Aj, 5)
+    num = klujax.factor(Ai, Aj, Ax, sym)
+    num.close()
+    num.close()
+
+
+def test_deprecated_free_symbolic():
+    Ai, Aj, _, _ = _get_rand_arrs_1d(15, 5, dtype=np.float64)
+    sym = klujax.analyze(Ai, Aj, 5)
+    with pytest.warns(DeprecationWarning, match="free_symbolic is deprecated"):
+        klujax.free_symbolic(sym)
+
+
+def test_deprecated_free_numeric():
+    Ai, Aj, Ax, _ = _get_rand_arrs_1d(15, 5, dtype=np.float64)
+    sym = klujax.analyze(Ai, Aj, 5)
+    num = klujax.factor(Ai, Aj, Ax, sym)
+    with pytest.warns(DeprecationWarning, match="free_numeric is deprecated"):
+        klujax.free_numeric(num)
+
+
+def _get_rss_kb():
+    """Return current RSS in kilobytes (Linux-only)."""
+    with Path(f"/proc/{os.getpid()}/status").open() as f:
+        for line in f:
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1])
+    return 0
+
+
+def test_no_leak_symbolic():
+    Ai, Aj, _, _ = _get_rand_arrs_1d(15, 5, dtype=np.float64)
+    for _ in range(50):
+        sym = klujax.analyze(Ai, Aj, 5)
+    del sym
+    gc.collect()
+
+    rss_before = _get_rss_kb()
+    for _ in range(5000):
+        sym = klujax.analyze(Ai, Aj, 5)
+    del sym
+    gc.collect()
+    rss_after = _get_rss_kb()
+
+    assert rss_after - rss_before < 10_000, (
+        f"RSS grew by {rss_after - rss_before} KB after 5000 analyze() calls"
     )
-    return x * 2.0
 
 
-def test_registration_traces_handle():
-    manager = klujax.KLUHandleManager(
-        jnp.array(0xDEADBEEF, dtype=jnp.int64), free_callable=lambda x: None
+def test_no_leak_numeric():
+    Ai, Aj, Ax, _ = _get_rand_arrs_1d(15, 5, dtype=np.float64)
+    sym = klujax.analyze(Ai, Aj, 5)
+    for _ in range(50):
+        num = klujax.factor(Ai, Aj, Ax, sym)
+    del num
+    gc.collect()
+
+    rss_before = _get_rss_kb()
+    for _ in range(5000):
+        num = klujax.factor(Ai, Aj, Ax, sym)
+    del num
+    gc.collect()
+    rss_after = _get_rss_kb()
+
+    assert rss_after - rss_before < 10_000, (
+        f"RSS grew by {rss_after - rss_before} KB after 5000 factor() calls"
     )
-
-    fn = jax.jit(use_handle)
-    result = fn(manager, jnp.array(1.0))
-    assert jnp.allclose(result, 2.0)
-
-
-def test_registration_handle_concrete_under_grad():
-    manager = klujax.KLUHandleManager(
-        jnp.array(0xDEADBEEF, dtype=jnp.int64), free_callable=lambda x: None
-    )
-    fn = jax.grad(lambda x: use_handle(manager, x))
-    fn(jnp.array(1.0))
-
-
-def test_handle_survives_pytree_roundtrip():
-    handle_val = jnp.array(0xDEADBEEF, dtype=jnp.int64)
-    manager = klujax.KLUHandleManager(handle_val, free_callable=lambda x: None)
-
-    leaves, treedef = jax.tree_util.tree_flatten(manager)
-    reconstructed = treedef.unflatten(leaves)
-
-    assert leaves == []
-    assert int(reconstructed.handle) == int(handle_val)
-
-
-def test_registration_handle_concrete_under_vmap():
-    manager = klujax.KLUHandleManager(
-        jnp.array(0xDEADBEEF, dtype=jnp.int64), free_callable=lambda x: None
-    )
-    fn = jax.vmap(lambda x: use_handle(manager, x))
-    result = fn(jnp.ones((4,)))
-    assert jnp.allclose(result, 2.0)
